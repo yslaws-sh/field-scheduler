@@ -39,7 +39,7 @@ if os.path.exists(file_path):
             row = df_info[df_info['full_id'] == selected_team_id].iloc[0]
             required = row['מספר אימונים']
             
-            st.info(f"קבוצת **{row['שם הקבוצה']}** צריכה **{required}** אימונים. ככל שתסמן יותר אפשרויות, יהיה קל יותר לשבץ אותך!")
+            st.success(f"קבוצת **{row['שם הקבוצה']}** צריכה **{required}** אימונים. ככל שתסמן יותר אפשרויות, יהיה קל יותר לשבץ אותך!")
             
             saved = [r['Unique'] for r in st.session_state.db if r['TeamID'] == selected_team_id]
             new_selections = []
@@ -54,17 +54,14 @@ if os.path.exists(file_path):
                     new_selections.append({"TeamID": selected_team_id, "Day": day, "Shift": "מאוחר", "Unique": u_late})
 
             if st.button("שמור העדפות"):
-                current_days = len(set([x['Day'] for x in new_selections]))
-                if current_days < required:
-                    st.warning(f"שים לב: סימנת רק {current_days} ימים, אבל הקבוצה צריכה {required}. המערכת לא תוכל להשלים לך אימונים חסרים.")
-                
-                # שליחה לגוגל לגיבוי
+                # שמירה ללא חסימות - הכל נכנס למערכת
                 for sel in new_selections:
                     requests.post(FORM_SUBMIT_URL, data={IDS["coach"]: sel["TeamID"], IDS["day"]: sel["Day"], IDS["shift"]: sel["Shift"]})
                 
                 st.session_state.db = [r for r in st.session_state.db if r['TeamID'] != selected_team_id]
                 st.session_state.db.extend(new_selections)
-                st.success(f"העדפות עבור {selected_team_id} עודכנו במערכת!")
+                st.success(f"העדפות עבור {selected_team_id} עודכנו. תודה על הגמישות!")
+                st.balloons()
 
     with tab2:
         st.subheader("לוח שיבוץ סופי (מבוסס גמישות מאמנים)")
@@ -81,20 +78,17 @@ if os.path.exists(file_path):
         usage = {tid: 0 for tid in df_info['full_id']}
         quota = {row['full_id']: row['מספר אימונים'] for _, row in df_info.iterrows()}
 
-        # סדר שיבוץ: קודם אלו עם הכי פחות אפשרויות (הכי פחות גמישים)
-        team_flexibility = {}
-        for tid in df_info['full_id']:
-            team_flexibility[tid] = len([r for r in st.session_state.db if r['TeamID'] == tid])
-        
+        # סדר שיבוץ חכם: קודם אלו עם הכי פחות אפשרויות (כדי לא לתקוע אותם)
+        team_flexibility = {tid: len([r for r in st.session_state.db if r['TeamID'] == tid]) for tid in df_info['full_id']}
         sorted_teams = sorted(df_info['full_id'].tolist(), key=lambda x: team_flexibility.get(x, 0))
 
         for tid in sorted_teams:
             team_reqs = [r for r in st.session_state.db if r['TeamID'] == tid]
             for req in team_reqs:
-                if usage[tid] >= quota[tid]: break # הגענו למכסה של הקבוצה
+                if usage[tid] >= quota[tid]: break # הגענו למכסה של הקבוצה לפי ה-CSV
                 
                 day = req['Day']
-                # וודא שהקבוצה לא משובצת כבר פעמיים באותו יום (חוק שעה וחצי)
+                # מוודא אימון אחד ביום לכל קבוצה
                 if len(df_grid[(df_grid['יום'] == day) & (df_grid['שיבוץ'] == tid)]) >= 1: continue
                 
                 allowed = ['16:30-18:00', '18:00-19:30'] if req['Shift'] == "מוקדם" else ['18:00-19:30', '19:30-21:00']
