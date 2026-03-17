@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+from streamlit_gsheets import GSheetsConnection
 import os
 from datetime import datetime, timedelta
 
@@ -7,100 +8,83 @@ st.set_page_config(page_title="ניהול מגרשים - הפועל הרצליה
 
 st.markdown("<h1 style='text-align: center; color: red;'>⚽ הפועל הרצליה - מערכת שיבוץ חכמה</h1>", unsafe_allow_html=True)
 
-# חישוב תאריכים
+# חיבור ל-Google Sheets (חובה שהגדרת ב-Secrets את gsheet_url)
+conn = st.connection("gsheets", type=GSheetsConnection)
+
+# הגדרות שבוע
 start_date = datetime(2026, 3, 22)
 days = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי']
-days_with_dates = [(start_date + timedelta(days=i)).strftime("%d/%m") for i in range(5)]
-day_labels = [f"יום {d} ({date})" for d, date in zip(days, days_with_dates)]
-
 shifts = ['מוקדם (16:30-19:30)', 'מאוחר (18:00-21:00)']
-field_parts = [
-    ('מגרש 1', 'חצי קדמי'), ('מגרש 1', 'חצי אחורי'),
-    ('מגרש 2', 'חצי קדמי'), ('מגרש 2', 'חצי אחורי')
-]
+field_parts = [('מגרש 1', 'חצי קדמי'), ('מגרש 1', 'חצי אחורי'), ('מגרש 2', 'חצי קדמי'), ('מגרש 2', 'חצי אחורי')]
 
-# ניהול נתונים (State)
-if 'db' not in st.session_state:
-    st.session_state.db = []
-
-# פונקציה קריטית: ניקוי התיבות בזמן החלפת מאמן
 def handle_coach_change():
-    for key in st.session_state.keys():
-        if key.startswith("cb_"):
-            del st.session_state[key]
+    for key in list(st.session_state.keys()):
+        if key.startswith("cb_"): del st.session_state[key]
 
-# טעינת מאמנים
+# קריאת נתונים קיימים מהגוגל שיטס
+try:
+    existing_db = conn.read(spreadsheet=st.secrets["gsheet_url"])
+except:
+    existing_db = pd.DataFrame(columns=["Coach", "Day", "Shift", "Unique_Key"])
+
 file_path = 'טבלת מאמנים.csv'
 if os.path.exists(file_path):
     coaches = pd.read_csv(file_path)['מאמן'].unique()
-    
-    tab1, tab2 = st.tabs(["📋 הזנת העדפות מאמנים", "📅 לוח שיבוץ שבועי"])
+    tab1, tab2 = st.tabs(["📋 הזנת העדפות מאמנים", "📅 לוח שיבוץ מעוצב"])
     
     with tab1:
-        # הוספנו on_change כדי לנקות את התיבות ברגע שבוחרים מאמן אחר
         current_coach = st.selectbox("בחר שם מאמן:", ["בחר מאמן"] + list(coaches), on_change=handle_coach_change)
         
         if current_coach != "בחר מאמן":
-            # שליפת בחירות קיימות של המאמן
-            saved_choices = [row['סבב_יום'] for row in st.session_state.db if row['מאמן'] == current_coach]
-            
+            # טעינת בחירות מהגוגל שיטס
+            saved_for_coach = existing_db[existing_db['Coach'] == current_coach]['Unique_Key'].tolist()
             st.write(f"שלום **{current_coach}**, סמן 4 ימים שונים:")
             
-            current_selections = []
-            for i, day_name in enumerate(days):
+            new_selections = []
+            for day in days:
                 st.write(f"---")
-                st.write(f"**{day_labels[i]}**")
                 cols = st.columns(2)
                 for j, shift in enumerate(shifts):
-                    unique_key = f"{day_name}_{shift}"
-                    # מפתח ייחודי לצ'קבוקס ב-session_state
-                    cb_key = f"cb_{unique_key}"
-                    
-                    # אם המאמן כבר בחר את זה בעבר, נסמן לו מראש
+                    u_key = f"{day}_{shift}"
+                    cb_key = f"cb_{u_key}"
                     if cb_key not in st.session_state:
-                        st.session_state[cb_key] = unique_key in saved_choices
+                        st.session_state[cb_key] = u_key in saved_for_coach
                     
                     if cols[j].checkbox(shift, key=cb_key):
-                        current_selections.append({
-                            "יום": day_name, 
-                            "סבב": shift, 
-                            "סבב_יום": unique_key, 
-                            "מאמן": current_coach
-                        })
+                        new_selections.append({"Coach": current_coach, "Day": day, "Shift": shift, "Unique_Key": u_key})
             
-            if st.button("שמור ועדכן שיבוץ"):
-                unique_days_count = len(set([x['יום'] for x in current_selections]))
-                if unique_days_count < 4:
-                    st.error(f"בחרת רק {unique_days_count} ימים. חובה לסמן לפחות 4 ימים שונים.")
+            if st.button("שמור ב-Google Sheets"):
+                if len(set([x['Day'] for x in new_selections])) < 4:
+                    st.error("חובה לסמן לפחות 4 ימים שונים.")
                 else:
-                    # עדכון בסיס הנתונים: מחיקת ישן והכנסת חדש
-                    st.session_state.db = [row for row in st.session_state.db if row['מאמן'] != current_coach]
-                    st.session_state.db.extend(current_selections)
-                    st.success(f"העדפות של {current_coach} נשמרו בהצלחה!")
+                    # עדכון הגיליון: מסירים ישן ומוסיפים חדש
+                    other_coaches = existing_db[existing_db['Coach'] != current_coach]
+                    final_df = pd.concat([other_coaches, pd.DataFrame(new_selections)], ignore_index=True)
+                    conn.update(spreadsheet=st.secrets["gsheet_url"], data=final_df)
+                    st.success("הנתונים נשמרו בגיליון!")
                     st.balloons()
 
     with tab2:
-        st.subheader(f"לוח שיבוץ סופי (שבוע ה-{days_with_dates[0]})")
-        
-        # יצירת לוח ריק
+        st.subheader("לוח שיבוץ שבועי (הצבה אוטומטית)")
+        # בניית הלוח הוויזואלי
         schedule = []
         for day in days:
             for shift in shifts:
                 for field, part in field_parts:
-                    schedule.append({"יום": day, "סבב": shift, "מגרש": field, "מיקום": part, "מאמן משובץ": ""})
-        df_schedule = pd.DataFrame(schedule)
+                    schedule.append({"יום": day, "סבב": shift, "מגרש": field, "מיקום": part, "מאמן": ""})
+        df_viz = pd.DataFrame(schedule)
 
-        # שיבוץ אוטומטי לתוך החצאים
-        for record in st.session_state.db:
-            mask = (df_schedule['יום'] == record['יום']) & \
-                   (df_schedule['סבב'] == record['סבב']) & \
-                   (df_schedule['מאמן משובץ'] == "")
-            
-            indices = df_schedule[mask].index
-            if len(indices) > 0:
-                df_schedule.at[indices[0], 'מאמן משובץ'] = record['מאמן']
+        # הצבת המאמנים מהגיליון ללוח
+        for _, row in existing_db.iterrows():
+            mask = (df_viz['יום'] == row['Day']) & (df_viz['סבב'] == row['Shift']) & (df_viz['מאמן'] == "")
+            idx = df_viz[mask].index
+            if len(idx) > 0: df_viz.at[idx[0], 'מאמן'] = row['Coach']
 
-        st.table(df_schedule)
-
+        # תצוגה יפה כטבלה רחבה (Pivot)
+        pivot_df = df_viz.pivot_table(index=['סבב', 'מגרש', 'מיקום'], columns='יום', values='מאמן', aggfunc=lambda x: ' '.join(x))
+        pivot_df = pivot_df.reindex(columns=days)
+        st.dataframe(pivot_df, use_container_width=True, height=500)
+        
+        if st.button("רענן לוח"): st.rerun()
 else:
-    st.error("קובץ המאמנים לא נמצא ב-GitHub.")
+    st.error("קובץ המאמנים חסר.")
