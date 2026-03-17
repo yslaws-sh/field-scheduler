@@ -5,18 +5,14 @@ import os
 import io
 from datetime import datetime, timedelta
 
-# הגדרת דף רחב ויישור לימין
 st.set_page_config(page_title="ניהול מגרשים - הפועל הרצליה", layout="wide")
 
-# הזרקת CSS ליישור כל האפליקציה לימין (RTL)
+# יישור לימין (RTL)
 st.markdown("""
     <style>
     .main { direction: rtl; text-align: right; }
     div.stSelectbox > label { text-align: right; width: 100%; }
-    div.stButton > button { width: 100%; }
-    .stTabs [data-baseweb="tab-list"] { direction: rtl; }
-    th { text-align: right !important; }
-    td { text-align: right !important; }
+    th, td { text-align: center !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -27,7 +23,7 @@ start_date = datetime(2026, 3, 22)
 days_list = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי']
 day_labels = [(start_date + timedelta(days=i)).strftime(f"יום {days_list[i]} %d/%m") for i in range(5)]
 
-# --- הגדרות ---
+# --- הגדרות קבועות ---
 FORM_SUBMIT_URL = "https://docs.google.com/forms/d/e/1FAIpQLSd-HaGeFh0P_zU7xs1kiFjLnM5i2mjZhiaRTcUD4h_L0ETksA/formResponse"
 IDS = {"coach": "entry.1199305397", "day": "entry.1231450869", "shift": "entry.1001387245"}
 SLOTS = ['16:30-18:00', '18:00-19:30', '19:30-21:00']
@@ -46,28 +42,35 @@ if os.path.exists(file_path):
         selected_team_id = st.selectbox("בחר קבוצה:", ["בחר קבוצה"] + df_info['full_id'].tolist())
         if selected_team_id != "בחר קבוצה":
             row = df_info[df_info['full_id'] == selected_team_id].iloc[0]
-            st.info(f"קבוצת **{row['שם הקבוצה']}** | אימונים נדרשים: **{row['מספר אימונים']}**")
+            st.success(f"שלום! עליך לסמן לפחות **4 ימים שונים**. בתוך כל יום תוכל לסמן כמה שעות שתרצה כדי לתת לנו גמישות.")
             
             saved = [r['Unique'] for r in st.session_state.db if r['TeamID'] == selected_team_id]
             new_selections = []
             for d_label in day_labels:
-                st.markdown(f"##### {d_label}")
+                st.markdown(f"#### {d_label}")
                 col1, col2 = st.columns(2)
                 u_early, u_late = f"{d_label}_מוקדם", f"{d_label}_מאוחר"
+                
                 if col1.checkbox("מוקדם (16:30-19:30)", key=f"cb_{selected_team_id}_{u_early}", value=u_early in saved):
                     new_selections.append({"TeamID": selected_team_id, "Day": d_label, "Shift": "מוקדם", "Unique": u_early})
                 if col2.checkbox("מאוחר (18:00-21:00)", key=f"cb_{selected_team_id}_{u_late}", value=u_late in saved):
                     new_selections.append({"TeamID": selected_team_id, "Day": d_label, "Shift": "מאוחר", "Unique": u_late})
 
             if st.button("שמור העדפות"):
-                for sel in new_selections:
-                    requests.post(FORM_SUBMIT_URL, data={IDS["coach"]: sel["TeamID"], IDS["day"]: sel["Day"], IDS["shift"]: sel["Shift"]})
-                st.session_state.db = [r for r in st.session_state.db if r['TeamID'] != selected_team_id]
-                st.session_state.db.extend(new_selections)
-                st.success("נשמר בהצלחה!")
+                # בדיקה: לפחות 4 ימים שונים
+                selected_days = set([x['Day'] for x in new_selections])
+                if len(selected_days) < 4:
+                    st.error(f"❌ חובה לסמן לפחות 4 ימים שונים (סימנת רק {len(selected_days)}).")
+                else:
+                    for sel in new_selections:
+                        requests.post(FORM_SUBMIT_URL, data={IDS["coach"]: sel["TeamID"], IDS["day"]: sel["Day"], IDS["shift"]: sel["Shift"]})
+                    st.session_state.db = [r for r in st.session_state.db if r['TeamID'] != selected_team_id]
+                    st.session_state.db.extend(new_selections)
+                    st.success(f"נשמר! תודה על הגמישות עם {len(new_selections)} אפשרויות שיבוץ.")
+                    st.balloons()
 
     with tab2:
-        # לוגיקת שיבוץ
+        # לוגיקת שיבוץ אוטומטית
         grid = []
         for d in day_labels:
             for s in SLOTS:
@@ -84,33 +87,40 @@ if os.path.exists(file_path):
             team_reqs = [r for r in st.session_state.db if r['TeamID'] == tid]
             for req in team_reqs:
                 if usage[tid] >= quota[tid]: break
-                if len(df_grid[(df_grid['יום'] == req['Day']) & (df_grid['שיבוץ'] == tid)]) >= 1: continue
+                day = req['Day']
+                if len(df_grid[(df_grid['יום'] == day) & (df_grid['שיבוץ'] == tid)]) >= 1: continue
+                
                 allowed = ['16:30-18:00', '18:00-19:30'] if req['Shift'] == "מוקדם" else ['18:00-19:30', '19:30-21:00']
                 for slot in allowed:
-                    mask = (df_grid['יום'] == req['Day']) & (df_grid['שעה'] == slot) & (df_grid['שיבוץ'] == "")
+                    mask = (df_grid['יום'] == day) & (df_grid['שעה'] == slot) & (df_grid['שיבוץ'] == "")
                     free_idx = df_grid[mask].index
                     if len(free_idx) > 0:
                         df_grid.at[free_idx[0], 'שיבוץ'] = tid
                         usage[tid] += 1
                         break
 
-        # יצירת Pivot מיושר לימין
         pivot = df_grid.pivot_table(index=['שעה', 'מגרש'], columns='יום', values='שיבוץ', aggfunc='first').reindex(columns=day_labels)
+        st.write("### לוח שיבוץ סופי")
         
-        st.write("### לוח אימונים שבועי")
-        st.dataframe(pivot, use_container_width=True, height=500)
+        # תצוגת טבלה מעוצבת
+        def style_rows(row):
+            return ['background-color: #ffe6e6' if "מגרש 1" in str(row.name) else 'background-color: #e6f3ff' for _ in row]
+        
+        st.table(pivot.style.apply(style_rows, axis=1))
 
-        # כפתור הורדה
+        # כפתור הורדה לאקסל צבעוני
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             pivot.to_excel(writer, sheet_name='לוח שיבוץ')
             workbook = writer.book
             worksheet = writer.sheets['לוח שיבוץ']
-            header_fmt = workbook.add_format({'bold': True, 'bg_color': '#D3D3D3', 'border': 1, 'align': 'center'})
-            for col_num, value in enumerate(pivot.columns.values):
-                worksheet.write(0, col_num + 2, value, header_fmt)
-
-        st.download_button("📥 הורד קובץ אקסל סופי", data=output.getvalue(), file_name=f"schedule_{start_date.strftime('%d_%m')}.xlsx")
+            fmt1 = workbook.add_format({'bg_color': '#FF9999', 'border': 1, 'align': 'center'})
+            fmt2 = workbook.add_format({'bg_color': '#99CCFF', 'border': 1, 'align': 'center'})
+            for r_num in range(len(pivot)):
+                m_name = pivot.index[r_num][1]
+                worksheet.set_row(r_num + 1, 25, fmt1 if "מגרש 1" in m_name else fmt2)
+        
+        st.download_button("📥 הורד לוח צבעוני לוואטסאפ", data=output.getvalue(), file_name=f"hapoel_schedule_{start_date.strftime('%d_%m')}.xlsx")
 
 else:
     st.error("קובץ CSV חסר")
