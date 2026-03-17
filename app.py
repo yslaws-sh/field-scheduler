@@ -7,12 +7,13 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="ניהול מגרשים - הפועל הרצליה", layout="wide")
 
-# יישור לימין (RTL)
+# יישור לימין (RTL) ועיצוב כללי
 st.markdown("""
     <style>
     .main { direction: rtl; text-align: right; }
     div.stSelectbox > label { text-align: right; width: 100%; }
     th, td { text-align: center !important; }
+    .stTabs [data-baseweb="tab-list"] { direction: rtl; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -34,10 +35,9 @@ if 'db' not in st.session_state: st.session_state.db = []
 file_path = 'טבלת מאמנים.csv'
 if os.path.exists(file_path):
     df_info = pd.read_csv(file_path)
-    # יצירת מזהה קבוצה ומאמן
     df_info['full_id'] = df_info['שם הקבוצה'] + " (" + df_info['מאמן'] + ")"
     
-    tab1, tab2 = st.tabs(["📋 הזנת העדפות", "📅 לוח שיבוץ סופי"])
+    tab1, tab2 = st.tabs(["📋 הזנת העדפות", "📅 לוח שיבוץ סופי לפרסום"])
     
     with tab1:
         selected_team_id = st.selectbox("בחר קבוצה:", ["בחר קבוצה"] + df_info['full_id'].tolist())
@@ -66,11 +66,11 @@ if os.path.exists(file_path):
                         requests.post(FORM_SUBMIT_URL, data={IDS["coach"]: sel["TeamID"], IDS["day"]: sel["Day"], IDS["shift"]: sel["Shift"]})
                     st.session_state.db = [r for r in st.session_state.db if r['TeamID'] != selected_team_id]
                     st.session_state.db.extend(new_selections)
-                    st.success("נשמר! המערכת תתחשב בכך שאתה מאמן מספר קבוצות.")
+                    st.success("נשמר! תודה על הגמישות.")
                     st.balloons()
 
     with tab2:
-        # לוגיקת שיבוץ חכמה
+        # לוגיקת שיבוץ עם בדיקת כפל מאמנים
         grid = []
         for d in day_labels:
             for s in SLOTS:
@@ -90,12 +90,11 @@ if os.path.exists(file_path):
                 day = req['Day']
                 coach = req['Coach']
                 
-                # האם הקבוצה כבר משובצת היום?
                 if len(df_grid[(df_grid['יום'] == day) & (df_grid['שיבוץ'] == tid)]) >= 1: continue
                 
                 allowed = ['16:30-18:00', '18:00-19:30'] if req['Shift'] == "מוקדם" else ['18:00-19:30', '19:30-21:00']
                 for slot in allowed:
-                    # בדיקה: האם המגרש פנוי? והאם המאמן עצמו פנוי בשעה הזו?
+                    # בדיקה: מגרש פנוי + מאמן לא משובץ בשעה הזו בקבוצה אחרת
                     mask = (df_grid['יום'] == day) & (df_grid['שעה'] == slot) & (df_grid['שיבוץ'] == "") & (df_grid['מאמן_משובץ'] != coach)
                     free_idx = df_grid[mask].index
                     if len(free_idx) > 0:
@@ -105,21 +104,41 @@ if os.path.exists(file_path):
                         break
 
         pivot = df_grid.pivot_table(index=['שעה', 'מגרש'], columns='יום', values='שיבוץ', aggfunc='first').reindex(columns=day_labels)
-        st.write("### לוח שיבוץ סופי (מתוקן - ללא כפל מאמן)")
+        
+        st.write("### לוח שיבוץ שבועי")
         st.table(pivot.style.apply(lambda r: ['background-color: #ffe6e6' if "מגרש 1" in str(r.name) else 'background-color: #e6f3ff' for _ in r], axis=1))
 
-        # הורדה
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            pivot.to_excel(writer, sheet_name='לוח שיבוץ')
+        # --- כפתור הורדה לקובץ מעוצב ---
+        output_fancy = io.BytesIO()
+        with pd.ExcelWriter(output_fancy, engine='xlsxwriter') as writer:
+            pivot.to_excel(writer, sheet_name='לוח הפועל הרצליה')
             workbook = writer.book
-            worksheet = writer.sheets['לוח שיבוץ']
-            fmt1 = workbook.add_format({'bg_color': '#FF9999', 'border': 1, 'align': 'center'})
-            fmt2 = workbook.add_format({'bg_color': '#99CCFF', 'border': 1, 'align': 'center'})
+            worksheet = writer.sheets['לוח הפועל הרצליה']
+            
+            # פורמטים לצבעים
+            fmt_red = workbook.add_format({'bg_color': '#FF9999', 'border': 1, 'align': 'center', 'bold': True})
+            fmt_blue = workbook.add_format({'bg_color': '#99CCFF', 'border': 1, 'align': 'center', 'bold': True})
+            fmt_header = workbook.add_format({'bg_color': '#D3D3D3', 'bold': True, 'border': 1, 'align': 'center'})
+
+            # כותרות עמודות
+            for col_num, value in enumerate(pivot.columns.values):
+                worksheet.write(0, col_num + 2, value, fmt_header)
+            
+            # צביעת שורות לפי מגרש
             for r_num in range(len(pivot)):
                 m_name = pivot.index[r_num][1]
-                worksheet.set_row(r_num + 1, 25, fmt1 if "מגרש 1" in m_name else fmt2)
-        st.download_button("📥 הורד לוח מתוקן", data=output.getvalue(), file_name="schedule_final.xlsx")
+                current_fmt = fmt_red if "מגרש 1" in m_name else fmt_blue
+                worksheet.set_row(r_num + 1, 30, current_fmt)
+            
+            worksheet.set_column('A:B', 20)
+            worksheet.set_column('C:G', 25)
+
+        st.download_button(
+            label="📥 הורד לוח צבעוני לפרסום בוואטסאפ",
+            data=output_fancy.getvalue(),
+            file_name=f"hapoel_schedule_{start_date.strftime('%d_%m')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
 else:
     st.error("קובץ CSV חסר")
