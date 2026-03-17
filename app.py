@@ -2,86 +2,81 @@ import streamlit as st
 import pandas as pd
 import os
 
-st.set_page_config(page_title="ניהול מגרשים - מועדון כדורגל", layout="wide")
+st.set_page_config(page_title="ניהול מגרשים - הפועל הרצליה", layout="wide")
 
-st.title("⚽ מערכת שיבוץ מגרשים חכמה")
+# עיצוב כותרת בסגנון המועדון
+st.markdown("<h1 style='text-align: center; color: red;'>מועדון הכדורגל הפועל הרצליה - מחלקת הנוער</h1>", unsafe_allow_html=True)
+st.markdown("<h3 style='text-align: center;'>מערכת שיבוץ מגרשים 2025/2026</h3>", unsafe_allow_html=True)
 
-# הגדרת מבנה המגרשים
-FIELDS = {
-    'מגרש 1': ['חצי קדמי (רבע 1-2)', 'חצי אחורי (רבע 3-4)'],
-    'מגרש 2': ['חצי קדמי (רבע 5-6)', 'חצי אחורי (רבע 7-8)']
-}
+# מבנה המגרשים והחלקים
+parts = ['מגרש 1 - חצי קדמי', 'מגרש 1 - חצי אחורי', 'מגרש 2 - חצי קדמי', 'מגרש 2 - חצי אחורי']
+days = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי']
+times = ['16:30-18:00', '18:00-19:30', '19:30-21:00']
 
-# פונקציה לניקוי בחירות
-if 'last_coach' not in st.session_state:
-    st.session_state.last_coach = "בחר מאמן"
+# ניהול נתונים בזיכרון האפליקציה (כדי שזה יופיע בטבלה מיד)
+if 'schedule_data' not in st.session_state:
+    st.session_state.schedule_data = []
 
-def reset_selections():
-    for key in st.session_state.keys():
-        if "day_" in key:
-            st.session_state[key] = False
-
-# טעינת קובץ המאמנים
+# טעינת רשימת מאמנים
 file_path = 'טבלת מאמנים.csv'
 if os.path.exists(file_path):
     df_coaches = pd.read_csv(file_path)
     coaches_list = df_coaches['מאמן'].unique()
     
-    tab1, tab2 = st.tabs(["📋 מילוי דרישות מאמנים", "📅 לוח שיבוץ ויזואלי"])
+    tab1, tab2 = st.tabs(["📋 מילוי דרישות מאמנים", "📅 לוח שיבוץ שבועי"])
     
     with tab1:
-        selected_coach = st.selectbox("בחר את שמך מהרשימה:", ["בחר מאמן"] + list(coaches_list))
-
-        if selected_coach != st.session_state.last_coach:
-            st.session_state.last_coach = selected_coach
-            reset_selections()
-            st.rerun()
-
+        col_a, col_b = st.columns([1, 2])
+        with col_a:
+            selected_coach = st.selectbox("בחר שם מאמן:", ["בחר מאמן"] + list(coaches_list))
+        
         if selected_coach != "בחר מאמן":
-            st.info(f"שלום {selected_coach}, סמן לפחות 4 ימים שבהם תוכל להתאמן.")
-            days = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי']
-            selected_slots = []
+            st.write(f"שלום **{selected_coach}**, סמן את המשמרות המועדפות עליך (חובה 4):")
             
+            selections = []
             for day in days:
-                st.markdown(f"### יום {day}")
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.checkbox(f"מוקדם (16:30-19:30)", key=f"day_{day}_early"):
-                        selected_slots.append(f"{day} מוקדם")
-                with col2:
-                    if st.checkbox(f"מאוחר (18:00-21:00)", key=f"day_{day}_late"):
-                        selected_slots.append(f"{day} מאוחר")
+                with st.expander(f"יום {day}"):
+                    c1, c2, c3 = st.columns(3)
+                    with c1: 
+                        if st.checkbox("16:30-18:00", key=f"{day}_1"): selections.append((day, "16:30-18:00"))
+                    with c2: 
+                        if st.checkbox("18:00-19:30", key=f"{day}_2"): selections.append((day, "18:00-19:30"))
+                    with c3: 
+                        if st.checkbox("19:30-21:00", key=f"{day}_3"): selections.append((day, "19:30-21:00"))
 
-            if st.button("שלח העדפות לשיבוץ"):
-                unique_days = len(set([s.split(' ')[0] for s in selected_slots]))
+            if st.button("שמור שיבוץ במערכת"):
+                unique_days = len(set([x[0] for x in selections]))
                 if unique_days < 4:
-                    st.error(f"סימנת רק {unique_days} ימים. חובה לסמן לפחות 4 ימים שונים!")
+                    st.error(f"סימנת רק {unique_days} ימים. דרושים 4 לפחות.")
                 else:
-                    st.success(f"הבחירה של {selected_coach} נשמרה בהצלחה!")
+                    # הוספה לרשימת השיבוץ
+                    for s in selections:
+                        st.session_state.schedule_data.append({
+                            "יום": s[0], "שעה": s[1], "מאמן": selected_coach
+                        })
+                    st.success("הנתונים נקלטו! עבור ללשונית לוח שיבוץ.")
                     st.balloons()
-                    # כאן אפשר להוסיף שמירה לקובץ מקומי או שליחה למייל
 
     with tab2:
-        st.subheader("לוח שיבוץ שבועי")
-        days = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי']
-        times = ['מוקדם (16:30-19:30)', 'מאוחר (18:00-21:00)']
+        st.subheader("לוח שיבוץ מגרשים - מבט על")
         
-        # יצירת מבנה הטבלה הוויזואלית שביקשת
-        grid = []
-        for day in days:
-            for time in times:
-                for field, parts in FIELDS.items():
-                    for part in parts:
-                        grid.append({
-                            "יום": day,
-                            "משמרת": time,
-                            "מגרש": field,
-                            "מיקום": part,
-                            "מאמן משובץ": "" 
-                        })
-        
-        display_df = pd.DataFrame(grid)
-        st.dataframe(display_df, use_container_width=True, height=800)
+        # יצירת הטבלה הויזואלית (Pivot)
+        if st.session_state.schedule_data:
+            df_final = pd.DataFrame(st.session_state.schedule_data)
+            # סיכום המאמנים לכל משבצת
+            summary = df_final.groupby(['שעה', 'יום'])['מאמן'].apply(lambda x: ", ".join(list(set(x)))).unstack()
+            # סידור עמודות לפי ימים
+            summary = summary.reindex(columns=days, fill_value="")
+            summary = summary.reindex(times)
+            
+            st.table(summary) # טבלה נקייה וברורה
+        else:
+            st.info("עדיין לא מולאו נתונים על ידי המאמנים.")
+            
+        # הצגת המבנה הריק של המגרשים
+        st.write("---")
+        st.write("**מקרא חלוקת מגרשים לכל משבצת:**")
+        st.json({"מגרש 1": ["חצי קדמי", "חצי אחורי"], "מגרש 2": ["חצי קדמי", "חצי אחורי"]})
 
 else:
     st.error("קובץ המאמנים לא נמצא.")
