@@ -28,7 +28,6 @@ def clear_ui():
 file_path = 'טבלת מאמנים.csv'
 if os.path.exists(file_path):
     df_info = pd.read_csv(file_path)
-    # יצירת מזהה ייחודי: שם הקבוצה (שם המאמן)
     df_info['full_id'] = df_info['שם הקבוצה'] + " (" + df_info['מאמן'] + ")"
     
     tab1, tab2 = st.tabs(["📋 הזנת העדפות קבוצה", "📅 לוח שיבוץ סופי"])
@@ -38,48 +37,39 @@ if os.path.exists(file_path):
         
         if selected_team_id != "בחר קבוצה":
             row = df_info[df_info['full_id'] == selected_team_id].iloc[0]
-            required_days = row['מספר אימונים']
-            coach_name = row['מאמן']
+            required = row['מספר אימונים']
             
-            st.info(f"שלום {coach_name}, לקבוצת **{row['שם הקבוצה']}** דרושים **{required_days}** אימונים בשבוע.")
+            st.info(f"קבוצת **{row['שם הקבוצה']}** צריכה **{required}** אימונים. ככל שתסמן יותר אפשרויות, יהיה קל יותר לשבץ אותך!")
             
-            # טעינת בחירות קיימות מהזיכרון
             saved = [r['Unique'] for r in st.session_state.db if r['TeamID'] == selected_team_id]
-            
             new_selections = []
             for day in days:
                 st.markdown(f"#### יום {day}")
                 col1, col2 = st.columns(2)
                 u_early, u_late = f"{day}_מוקדם", f"{day}_מאוחר"
                 
-                # מפתח ייחודי לצ'קבוקס
-                key_e = f"cb_{selected_team_id}_{u_early}"
-                key_l = f"cb_{selected_team_id}_{u_late}"
-                
-                if col1.checkbox("מוקדם (16:30-19:30)", key=key_e, value=u_early in saved):
+                if col1.checkbox("מוקדם (16:30-19:30)", key=f"cb_{selected_team_id}_{u_early}", value=u_early in saved):
                     new_selections.append({"TeamID": selected_team_id, "Day": day, "Shift": "מוקדם", "Unique": u_early})
-                if col2.checkbox("מאוחר (18:00-21:00)", key=key_l, value=u_late in saved):
+                if col2.checkbox("מאוחר (18:00-21:00)", key=f"cb_{selected_team_id}_{u_late}", value=u_late in saved):
                     new_selections.append({"TeamID": selected_team_id, "Day": day, "Shift": "מאוחר", "Unique": u_late})
 
-            if st.button("שמור שיבוץ"):
-                selected_days_count = len(set([x['Day'] for x in new_selections]))
-                if selected_days_count != required_days:
-                    st.error(f"עליך לבחור בדיוק {required_days} ימים (בחרת {selected_days_count}).")
-                else:
-                    # שליחה לגוגל
-                    for sel in new_selections:
-                        requests.post(FORM_SUBMIT_URL, data={IDS["coach"]: sel["TeamID"], IDS["day"]: sel["Day"], IDS["shift"]: sel["Shift"]})
-                    
-                    # עדכון הזיכרון
-                    st.session_state.db = [r for r in st.session_state.db if r['TeamID'] != selected_team_id]
-                    st.session_state.db.extend(new_selections)
-                    st.success(f"העדפות עבור {selected_team_id} נשמרו!")
-                    st.balloons()
+            if st.button("שמור העדפות"):
+                current_days = len(set([x['Day'] for x in new_selections]))
+                if current_days < required:
+                    st.warning(f"שים לב: סימנת רק {current_days} ימים, אבל הקבוצה צריכה {required}. המערכת לא תוכל להשלים לך אימונים חסרים.")
+                
+                # שליחה לגוגל לגיבוי
+                for sel in new_selections:
+                    requests.post(FORM_SUBMIT_URL, data={IDS["coach"]: sel["TeamID"], IDS["day"]: sel["Day"], IDS["shift"]: sel["Shift"]})
+                
+                st.session_state.db = [r for r in st.session_state.db if r['TeamID'] != selected_team_id]
+                st.session_state.db.extend(new_selections)
+                st.success(f"העדפות עבור {selected_team_id} עודכנו במערכת!")
 
     with tab2:
-        st.subheader("לוח שיבוץ אוטומטי (קבוצה + מאמן)")
+        st.subheader("לוח שיבוץ סופי (מבוסס גמישות מאמנים)")
         
-        # יצירת לוח ריק לפי שעות אימון אמיתיות
+        # יצירת לוח ריק
         grid = []
         for day in days:
             for slot in SLOTS:
@@ -87,25 +77,37 @@ if os.path.exists(file_path):
                     grid.append({"יום": day, "שעה": slot, "מגרש": field, "שיבוץ": ""})
         df_grid = pd.DataFrame(grid)
 
-        # הצבה חכמה: כל קבוצה מקבלת אימון אחד ביום שבחרה
-        for day in days:
-            daily_reqs = [r for r in st.session_state.db if r['Day'] == day]
-            for req in daily_reqs:
-                # טווח השעות לפי הסבב שנבחר
-                allowed = ['16:30-18:00', '18:00-19:30'] if req['Shift'] == "מוקדם" else ['18:00-19:30', '19:30-21:00']
+        # מעקב מכסות
+        usage = {tid: 0 for tid in df_info['full_id']}
+        quota = {row['full_id']: row['מספר אימונים'] for _, row in df_info.iterrows()}
+
+        # סדר שיבוץ: קודם אלו עם הכי פחות אפשרויות (הכי פחות גמישים)
+        team_flexibility = {}
+        for tid in df_info['full_id']:
+            team_flexibility[tid] = len([r for r in st.session_state.db if r['TeamID'] == tid])
+        
+        sorted_teams = sorted(df_info['full_id'].tolist(), key=lambda x: team_flexibility.get(x, 0))
+
+        for tid in sorted_teams:
+            team_reqs = [r for r in st.session_state.db if r['TeamID'] == tid]
+            for req in team_reqs:
+                if usage[tid] >= quota[tid]: break # הגענו למכסה של הקבוצה
                 
-                shuffled_slots = allowed # ניתן לערבב אם רוצים אקראיות
-                assigned = False
-                for slot in shuffled_slots:
+                day = req['Day']
+                # וודא שהקבוצה לא משובצת כבר פעמיים באותו יום (חוק שעה וחצי)
+                if len(df_grid[(df_grid['יום'] == day) & (df_grid['שיבוץ'] == tid)]) >= 1: continue
+                
+                allowed = ['16:30-18:00', '18:00-19:30'] if req['Shift'] == "מוקדם" else ['18:00-19:30', '19:30-21:00']
+                for slot in allowed:
                     mask = (df_grid['יום'] == day) & (df_grid['שעה'] == slot) & (df_grid['שיבוץ'] == "")
                     free_idx = df_grid[mask].index
                     if len(free_idx) > 0:
-                        df_grid.at[free_idx[0], 'שיבוץ'] = req['TeamID']
-                        assigned = True
+                        df_grid.at[free_idx[0], 'שיבוץ'] = tid
+                        usage[tid] += 1
                         break
 
         pivot = df_grid.pivot_table(index=['שעה', 'מגרש'], columns='יום', values='שיבוץ', aggfunc='first').reindex(columns=days)
         pivot.columns = day_labels
         st.table(pivot)
 else:
-    st.error("קובץ 'טבלת מאמנים.csv' חסר ב-GitHub.")
+    st.error("קובץ CSV חסר.")
