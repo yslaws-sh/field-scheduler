@@ -11,8 +11,12 @@ st.markdown("<h1 style='text-align: center; color: red;'>⚽ הפועל הרצל
 # חיבור ל-Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# הגדרות זמן
+# הגדרות זמן ותאריכים (שבוע שמתחיל ב-22/03/2026)
+start_date = datetime(2026, 3, 22)
 days = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי']
+# יצירת רשימה של "יום X (תאריך)"
+day_labels = [(start_date + timedelta(days=i)).strftime(f"יום {days[i]} (%d/%m)") for i in range(5)]
+
 shifts = ['מוקדם (16:30-19:30)', 'מאוחר (18:00-21:00)']
 field_parts = [
     ('מגרש 1', 'חצי קדמי'), ('מגרש 1', 'חצי אחורי'),
@@ -27,7 +31,6 @@ def handle_coach_change():
 # קריאת נתונים קיימים
 try:
     existing_db = conn.read(spreadsheet=st.secrets["gsheet_url"], ttl=0)
-    # ניקוי כפילויות אם יש
     existing_db = existing_db.drop_duplicates()
 except:
     existing_db = pd.DataFrame(columns=["Coach", "Day", "Shift", "Unique_Key"])
@@ -43,22 +46,22 @@ if os.path.exists(file_path):
         
         if current_coach != "בחר מאמן":
             saved_for_coach = existing_db[existing_db['Coach'] == current_coach]['Unique_Key'].tolist()
-            st.info(f"שלום {current_coach}, בחר 4 ימים שונים לשיבוץ:")
+            st.info(f"שלום {current_coach}, בחר 4 ימים לשבוע של ה-{start_date.strftime('%d/%m')}:")
             
             new_selections = []
-            for day in days:
-                st.markdown(f"#### יום {day}") # הכותרת שחזרה!
+            for i, day_name in enumerate(days):
+                st.markdown(f"#### {day_labels[i]}") # כאן נכנס התאריך לכותרת
                 cols = st.columns(2)
                 for j, shift in enumerate(shifts):
-                    u_key = f"{day}_{shift}"
+                    u_key = f"{day_name}_{shift}"
                     cb_key = f"cb_{u_key}"
                     
                     if cb_key not in st.session_state:
                         st.session_state[cb_key] = u_key in saved_for_coach
                     
                     if cols[j].checkbox(shift, key=cb_key):
-                        new_selections.append({"Coach": current_coach, "Day": day, "Shift": shift, "Unique_Key": u_key})
-                st.write("") # רווח בין ימים
+                        new_selections.append({"Coach": current_coach, "Day": day_name, "Shift": shift, "Unique_Key": u_key})
+                st.write("") 
 
             if st.button("שמור ב-Google Sheets"):
                 unique_days_count = len(set([x['Day'] for x in new_selections]))
@@ -68,13 +71,12 @@ if os.path.exists(file_path):
                     other_coaches = existing_db[existing_db['Coach'] != current_coach]
                     final_df = pd.concat([other_coaches, pd.DataFrame(new_selections)], ignore_index=True)
                     conn.update(spreadsheet=st.secrets["gsheet_url"], data=final_df)
-                    st.success("הנתונים נשמרו בגיליון בהצלחה!")
+                    st.success("הנתונים נשמרו!")
                     st.balloons()
 
     with tab2:
-        st.subheader("לוח שיבוץ שבועי מרוכז")
+        st.subheader(f"לוח שיבוץ שבועי: {day_labels[0]} - {day_labels[-1]}")
         
-        # יצירת לוח בסיס ריק
         schedule = []
         for day in days:
             for shift in shifts:
@@ -82,7 +84,6 @@ if os.path.exists(file_path):
                     schedule.append({"יום": day, "סבב": shift, "מגרש": field, "מיקום": part, "מאמן": ""})
         df_viz = pd.DataFrame(schedule)
 
-        # הצבת מאמנים מהגיליון
         if not existing_db.empty:
             for _, row in existing_db.iterrows():
                 mask = (df_viz['יום'] == row['Day']) & (df_viz['סבב'] == row['Shift']) & (df_viz['מאמן'] == "")
@@ -90,15 +91,17 @@ if os.path.exists(file_path):
                 if len(idx) > 0:
                     df_viz.at[idx[0], 'מאמן'] = row['Coach']
 
-        # עיצוב הטבלה כמו בצילום (עמודות = ימים)
-        # אנחנו יוצרים מפתח של שעה + מגרש כדי שהטבלה תהיה קריאה
+        # בניית הטבלה עם תאריכים בכותרות העמודות
         df_viz['משמרת_מגרש'] = df_viz['סבב'] + " | " + df_viz['מגרש'] + " | " + df_viz['מיקום']
         pivot_df = df_viz.pivot(index='משמרת_מגרש', columns='יום', values='מאמן')
-        pivot_df = pivot_df.reindex(columns=days) # סידור ימים לפי הסדר
+        
+        # שינוי שמות העמודות מימים ל"יום+תאריך"
+        pivot_df = pivot_df.reindex(columns=days)
+        pivot_df.columns = day_labels
         
         st.dataframe(pivot_df, use_container_width=True, height=600)
         
         if st.button("רענן לוח נתונים"):
             st.rerun()
 else:
-    st.error("קובץ המאמנים חסר ב-GitHub.")
+    st.error("קובץ המאמנים חסר.")
