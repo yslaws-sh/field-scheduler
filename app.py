@@ -7,10 +7,10 @@ st.set_page_config(page_title="ניהול מגרשים - הפועל הרצליה
 
 st.markdown("<h1 style='text-align: center; color: red;'>⚽ הפועל הרצליה - מערכת שיבוץ חכמה</h1>", unsafe_allow_html=True)
 
-# חישוב תאריכים לשבוע הקרוב (החל מיום ראשון 22/03/2026)
+# חישוב תאריכים
 start_date = datetime(2026, 3, 22)
-days_with_dates = [(start_date + timedelta(days=i)).strftime("%d/%m") for i in range(5)]
 days = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי']
+days_with_dates = [(start_date + timedelta(days=i)).strftime("%d/%m") for i in range(5)]
 day_labels = [f"יום {d} ({date})" for d, date in zip(days, days_with_dates)]
 
 shifts = ['מוקדם (16:30-19:30)', 'מאוחר (18:00-21:00)']
@@ -22,10 +22,14 @@ field_parts = [
 # ניהול נתונים (State)
 if 'db' not in st.session_state:
     st.session_state.db = []
-if 'last_coach' not in st.session_state:
-    st.session_state.last_coach = "בחר מאמן"
 
-# טעינת מאמנים מהקובץ שהעלית
+# פונקציה קריטית: ניקוי התיבות בזמן החלפת מאמן
+def handle_coach_change():
+    for key in st.session_state.keys():
+        if key.startswith("cb_"):
+            del st.session_state[key]
+
+# טעינת מאמנים
 file_path = 'טבלת מאמנים.csv'
 if os.path.exists(file_path):
     coaches = pd.read_csv(file_path)['מאמן'].unique()
@@ -33,64 +37,70 @@ if os.path.exists(file_path):
     tab1, tab2 = st.tabs(["📋 הזנת העדפות מאמנים", "📅 לוח שיבוץ שבועי"])
     
     with tab1:
-        current_coach = st.selectbox("בחר שם מאמן:", ["בחר מאמן"] + list(coaches))
+        # הוספנו on_change כדי לנקות את התיבות ברגע שבוחרים מאמן אחר
+        current_coach = st.selectbox("בחר שם מאמן:", ["בחר מאמן"] + list(coaches), on_change=handle_coach_change)
         
-        # אם החלפנו מאמן - מרעננים את הדף כדי לטעון את הבחירות שלו
-        if current_coach != st.session_state.last_coach:
-            st.session_state.last_coach = current_coach
-            st.rerun()
-
         if current_coach != "בחר מאמן":
-            # שליפת בחירות קיימות של המאמן מה"בסיס נתונים"
+            # שליפת בחירות קיימות של המאמן
             saved_choices = [row['סבב_יום'] for row in st.session_state.db if row['מאמן'] == current_coach]
             
-            st.write(f"שלום **{current_coach}**, אלו הבחירות שלך לשבוע של ה-{days_with_dates[0]}:")
+            st.write(f"שלום **{current_coach}**, סמן 4 ימים שונים:")
             
             current_selections = []
-            for i, label in enumerate(day_labels):
-                st.write(f"**{label}**")
+            for i, day_name in enumerate(days):
+                st.write(f"---")
+                st.write(f"**{day_labels[i]}**")
                 cols = st.columns(2)
                 for j, shift in enumerate(shifts):
-                    unique_key = f"{days[i]}_{shift}"
-                    # הצגת הצ'קבוקס מסומן אם הוא קיים בזיכרון
-                    is_checked = unique_key in saved_choices
-                    if cols[j].checkbox(f"{shift}", key=f"cb_{unique_key}", value=is_checked):
-                        current_selections.append({"יום": days[i], "סבב": shift, "סבב_יום": unique_key, "מאמן": current_coach})
+                    unique_key = f"{day_name}_{shift}"
+                    # מפתח ייחודי לצ'קבוקס ב-session_state
+                    cb_key = f"cb_{unique_key}"
+                    
+                    # אם המאמן כבר בחר את זה בעבר, נסמן לו מראש
+                    if cb_key not in st.session_state:
+                        st.session_state[cb_key] = unique_key in saved_choices
+                    
+                    if cols[j].checkbox(shift, key=cb_key):
+                        current_selections.append({
+                            "יום": day_name, 
+                            "סבב": shift, 
+                            "סבב_יום": unique_key, 
+                            "מאמן": current_coach
+                        })
             
             if st.button("שמור ועדכן שיבוץ"):
                 unique_days_count = len(set([x['יום'] for x in current_selections]))
                 if unique_days_count < 4:
                     st.error(f"בחרת רק {unique_days_count} ימים. חובה לסמן לפחות 4 ימים שונים.")
                 else:
-                    # מחיקת הישן והוספת החדש (Update)
+                    # עדכון בסיס הנתונים: מחיקת ישן והכנסת חדש
                     st.session_state.db = [row for row in st.session_state.db if row['מאמן'] != current_coach]
                     st.session_state.db.extend(current_selections)
-                    st.success("הבחירות עודכנו ונשמרו בלוח!")
+                    st.success(f"העדפות של {current_coach} נשמרו בהצלחה!")
                     st.balloons()
 
     with tab2:
-        st.subheader(f"לוח שיבוץ - שבוע {days_with_dates[0]}-{days_with_dates[-1]}")
+        st.subheader(f"לוח שיבוץ סופי (שבוע ה-{days_with_dates[0]})")
         
-        # יצירת לוח ריק להצבה
+        # יצירת לוח ריק
         schedule = []
         for day in days:
             for shift in shifts:
                 for field, part in field_parts:
-                    schedule.append({"יום": day, "סבב": shift, "מגרש": field, "מיקום": part, "מאמן": ""})
+                    schedule.append({"יום": day, "סבב": shift, "מגרש": field, "מיקום": part, "מאמן משובץ": ""})
         df_schedule = pd.DataFrame(schedule)
 
-        # הצבת מאמנים לתוך הלוח (אלגוריתם חלוקת מגרשים)
+        # שיבוץ אוטומטי לתוך החצאים
         for record in st.session_state.db:
             mask = (df_schedule['יום'] == record['יום']) & \
                    (df_schedule['סבב'] == record['סבב']) & \
-                   (df_schedule['מאמן'] == "")
+                   (df_schedule['מאמן משובץ'] == "")
             
-            free_slots = df_schedule[mask].index
-            if len(free_slots) > 0:
-                df_schedule.at[free_slots[0], 'מאמן'] = record['מאמן']
+            indices = df_schedule[mask].index
+            if len(indices) > 0:
+                df_schedule.at[indices[0], 'מאמן משובץ'] = record['מאמן']
 
-        # תצוגה מעוצבת של הטבלה
-        st.dataframe(df_schedule, use_container_width=True, height=600)
+        st.table(df_schedule)
 
 else:
-    st.error("קובץ 'טבלת מאמנים.csv' לא נמצא ב-GitHub.")
+    st.error("קובץ המאמנים לא נמצא ב-GitHub.")
