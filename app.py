@@ -6,7 +6,7 @@ import io
 import time
 from datetime import datetime, timedelta
 
-# 1. הגדרות אפליקציה והסתרת תפריטים למראה נקי
+# 1. הגדרות אפליקציה ומראה נקי (הסתרת תפריטי Streamlit)
 st.set_page_config(
     page_title="הפועל הרצליה - ניהול", 
     page_icon="⚽", 
@@ -14,25 +14,32 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# CSS להסתרת תפריטי Streamlit ועיצוב RTL
+# עיצוב RTL, הוספת מרווח עליון והסתרת רכיבי מערכת
 st.markdown("""
     <style>
-    /* הסתרת אלמנטים של Streamlit למאמנים */
+    /* הסתרת תפריטים למאמנים */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
     .stDeployButton {display:none;}
     
+    /* מרווח עליון כדי שהכותרת לא תידבק לתקרה */
+    .block-container {
+        padding-top: 2rem !important;
+        direction: rtl;
+    }
+    
     .main { direction: rtl; text-align: right; background-color: #f8f9fa; }
     body { direction: rtl; }
+    
     .main-header { 
         background-color: #e31e24; 
-        padding: 20px; 
-        border-radius: 0 0 20px 20px; 
+        padding: 25px; 
+        border-radius: 15px; 
         color: white; 
         text-align: center; 
-        margin-bottom: 20px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        margin-bottom: 30px;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.15);
     }
     .stButton>button { 
         width: 100%; 
@@ -42,14 +49,15 @@ st.markdown("""
         font-weight: bold; 
         height: 3.5em;
     }
-    th, td { text-align: center !important; border: 1px solid #dee2e6 !important; padding: 8px !important; }
+    th, td { text-align: center !important; border: 1px solid #dee2e6 !important; padding: 10px !important; }
     </style>
     <div class="main-header">
-        <h1 style='margin:0; font-size: 26px;'>⚽ הפועל הרצליה - מערכת שיבוץ מגרשים</h1>
+        <h1 style='margin:0; font-size: 28px;'>⚽ הפועל הרצליה - מערכת שיבוץ מגרשים</h1>
+        <p style='margin:0; font-size: 16px; opacity: 0.9;'>ניהול חכם וסנכרון מאמנים</p>
     </div>
     """, unsafe_allow_html=True)
 
-# 2. ניהול Session State
+# 2. ניהול Session State (תאריך ואיפוס)
 if 'start_date' not in st.session_state:
     today = datetime.now()
     # ברירת מחדל ליום ראשון הקרוב
@@ -58,7 +66,7 @@ if 'start_date' not in st.session_state:
 if 'skip_rows' not in st.session_state:
     st.session_state.skip_rows = 0
 
-# 3. הגדרות קישורים
+# 3. פונקציות עזר וחיבורים
 SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR8In1pn4dPWFvpIrxj1eLufbA7KQ6_wupxQiDbfxsAmvjsHrsO8ehPc3f5fT0TbenxVaLr8Tet6h5u/pub?output=csv"
 FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSd-HaGeFh0P_zU7xs1kiFjLnM5i2mjZhiaRTcUD4h_L0ETksA/formResponse"
 ENTRY_IDS = {"coach": "entry.1199305397", "day": "entry.1231450869", "shift": "entry.1001387245"}
@@ -73,7 +81,7 @@ def load_data_from_google():
         if res.status_code == 200:
             res.encoding = 'utf-8'
             df = pd.read_csv(io.StringIO(res.text))
-            # מנגנון איפוס (דילוג על שורות ישנות)
+            # מנגנון איפוס (דילוג על X שורות ראשונות בגיליון)
             if st.session_state.skip_rows > 0:
                 df = df.iloc[st.session_state.skip_rows:]
             df = df.applymap(lambda x: str(x).strip() if pd.notnull(x) else "")
@@ -81,7 +89,7 @@ def load_data_from_google():
     except: pass
     return pd.DataFrame()
 
-# 4. לוגיקה מרכזית
+# 4. תוכן האפליקציה
 file_path = 'טבלת מאמנים.csv'
 if os.path.exists(file_path):
     df_info = pd.read_csv(file_path)
@@ -98,8 +106,7 @@ if os.path.exists(file_path):
         if selected_team != "לחץ לבחירה...":
             st.info("💡 אנא סמנו לפחות 4 אופציות שונות בימים ובשעות; גמישות זו קריטית ליכולת של המערכת למקסם את שיבוץ הקבוצות ולקלוע בצורה הטובה ביותר לבקשות של כולם.")
             
-            # הגדרת שעות לתצוגה
-            slots_list = ['16:30-18:00', '18:00-19:30', '19:30-21:00']
+            # הגדרת שעות לתצוגה במקום מילים
             early_range = "16:30 - 19:30"
             late_range = "18:00 - 21:00"
             
@@ -112,33 +119,34 @@ if os.path.exists(file_path):
                     if c2.checkbox(f"⏰ {late_range}", key=f"l_{selected_team}_{d_label}"): 
                         new_selections.append({"Day": d_label, "Shift": "מאוחר"})
             
-            if st.button("שלח ושמור 🚀"):
+            if st.button("שלח ושמור העדפות 🚀"):
                 if not new_selections:
                     st.warning("לא נבחרה משבצת.")
                 else:
                     for sel in new_selections:
                         requests.post(FORM_URL, data={ENTRY_IDS["coach"]: selected_team, ENTRY_IDS["day"]: sel["Day"], ENTRY_IDS["shift"]: sel["Shift"]})
-                    st.success("נשמר בהצלחה! הנתונים בדרך ללוח המנהל.")
+                    st.success("העדפותיך נשמרו בהצלחה!")
 
     # --- טאב מנהל ---
     with tabs[1]:
-        if st.text_input("סיסמת מנהל (1906):", type="password") == "1906":
-            st.markdown("### 🛠 הגדרות שבוע וניהול")
+        # שדה סיסמה מאובטח ונקי
+        if st.text_input("הזן סיסמת מנהל לגישה:", type="password") == "1906":
+            st.markdown("### 🛠 פאנל ניהול שבוע")
             c1, c2, c3 = st.columns(3)
             with c1:
                 new_d = st.date_input("בחר יום ראשון של השבוע:", value=st.session_state.start_date)
                 if new_d != st.session_state.start_date.date():
                     st.session_state.start_date = datetime.combine(new_d, datetime.min.time())
                     st.rerun()
-            with c2: 
-                st.button("רענן נתונים 🔄")
+            with c2: st.button("רענן לוח שיבוץ 🔄")
             with c3:
                 if st.button("איפוס מוחלט (ניקוי לוח) 🗑️"):
+                    # קריאת מספר השורות הנוכחי בגוגל שיטס כדי להתעלם מהן
                     res = requests.get(SHEET_CSV_URL)
                     if res.status_code == 200:
                         temp_df = pd.read_csv(io.StringIO(res.text))
                         st.session_state.skip_rows = len(temp_df)
-                        st.warning("המערכת נוקתה. דיווחים ישנים לא יופיעו בטבלה.")
+                        st.warning("הלוח אופס. דיווחים ישנים לא יופיעו יותר.")
                         st.rerun()
 
             raw_data = load_data_from_google()
@@ -146,6 +154,7 @@ if os.path.exists(file_path):
                 slots = ['16:30-18:00', '18:00-19:30', '19:30-21:00']
                 fields = ['קאנטרי קדמי 1', 'קאנטרי קדמי 2', 'קאנטרי אחורי 1', 'קאנטרי אחורי 2', 'משק קדמי 1', 'משק קדמי 2', 'משק אחורי 1', 'משק אחורי 2', 'סינטטי קטן']
                 
+                # יצירת גריד ריק
                 grid = []
                 for d in day_labels:
                     for s in slots:
@@ -164,9 +173,10 @@ if os.path.exists(file_path):
                         matched_d = next((d for d in day_labels if d.split(' ')[1] in day_v), None)
                         
                         if matched_d and len(df_grid[(df_grid['יום'] == matched_d) & (df_grid['שיבוץ'] == tid)]) == 0:
-                            allowed_slots = slots[:2] if "מוקדם" in shift_v else slots[1:]
-                            for slot in allowed_slots:
-                                # בדיקת כפל מאמן
+                            # הגדרת חלונות זמן לפי מוקדם/מאוחר
+                            allowed = slots[:2] if "מוקדם" in shift_v else slots[1:]
+                            for slot in allowed:
+                                # חסימת כפל מאמנים באותה שעה
                                 if df_grid[(df_grid['יום'] == matched_d) & (df_grid['שעה'] == slot) & (df_grid['מאמן'] == coach_n)].empty:
                                     mask = (df_grid['יום'] == matched_d) & (df_grid['שעה'] == slot) & (df_grid['שיבוץ'] == "")
                                     idx = df_grid[mask].index
@@ -175,18 +185,18 @@ if os.path.exists(file_path):
                                         df_grid.at[idx[0], 'מאמן'] = coach_n
                                         break
 
-                # יצירת טבלה עם סדר ימים קבוע (א-ה)
+                # יצירת הטבלה הסופית עם סדר ימים קשיח (א-ה)
                 final_df = df_grid.pivot_table(index=['שעה', 'מגרש'], columns='יום', values='שיבוץ', aggfunc='first', fill_value="")
                 final_df = final_df.reindex(columns=day_labels).reset_index()
                 
-                st.write(f"### 📅 לוח שיבוץ מגרשים - {st.session_state.start_date.strftime('%d/%m')}")
+                st.write(f"### 📊 לוח שיבוץ מגרשים - שבוע {st.session_state.start_date.strftime('%d/%m')}")
                 st.table(final_df)
                 
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                     final_df.to_excel(writer, index=False)
-                st.download_button("📥 הורד קובץ אקסל סופי", output.getvalue(), f"Hapoel_Herzliya_{st.session_state.start_date.strftime('%d_%m')}.xlsx")
+                st.download_button("📥 הורד לוח שיבוץ סופי (Excel)", output.getvalue(), f"Herzliya_Schedule_{st.session_state.start_date.strftime('%d_%m')}.xlsx")
             else:
-                st.info("הלוח נקי. ממתין לדיווחים.")
+                st.info("הלוח נקי. ממתין לדיווחים מהמאמנים.")
 else:
-    st.error("שגיאה: קובץ המאמנים חסר.")
+    st.error("שגיאה: קובץ המאמנים חסר בשרת.")
