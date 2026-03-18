@@ -25,7 +25,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- הגדרות חיבור לגוגל ---
-FORM_RESPONSE_URL = "https://docs.google.com/forms/d/e/1FAIpQLSd-HaGeFh0P_zU7xs1kiFjLnM5i2mjZhiaRTcUD4h_L0ETksA/formResponse"
+FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSd-HaGeFh0P_zU7xs1kiFjLnM5i2mjZhiaRTcUD4h_L0ETksA/formResponse"
 SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR8In1pn4dPWFvpIrxj1eLufbA7KQ6_wupxQiDbfxsAmvjsHrsO8ehPc3f5fT0TbenxVaLr8Tet6h5u/pub?output=csv"
 
 ENTRY_IDS = {
@@ -34,21 +34,18 @@ ENTRY_IDS = {
     "shift": "entry.1001387245"
 }
 
-# פונקציית טעינה עם מנגנון מניעת Cache חזק
 def load_data_from_google():
     try:
-        # יצירת קישור ייחודי בכל פעם כדי שגוגל לא יביא נתונים ישנים מהזיכרון
-        t = int(time.time())
-        url = f"{SHEET_CSV_URL}&cache_bust={t}"
-        res = requests.get(url)
+        # ביטול Cache של גוגל
+        res = requests.get(f"{SHEET_CSV_URL}&cache_bust={time.time()}")
         if res.status_code == 200:
             df = pd.read_csv(io.StringIO(res.text))
+            # ניקוי שמות עמודות וערכים מרווחים מיותרים
             df.columns = [c.strip() for c in df.columns]
-            # מנקה שורות ריקות אם יש
-            df = df.dropna(subset=[df.columns[1]])
+            df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
             return df
-    except Exception as e:
-        st.error(f"שגיאה בטעינה: {e}")
+    except:
+        pass
     return pd.DataFrame()
 
 # --- הגדרות מערכת ---
@@ -63,7 +60,7 @@ day_labels = [(start_date + timedelta(days=i)).strftime(f"יום {days_list[i]} 
 file_path = 'טבלת מאמנים.csv'
 if os.path.exists(file_path):
     df_info = pd.read_csv(file_path)
-    df_info['full_id'] = df_info['שם הקבוצה'] + " (" + df_info['מאמן'] + ")"
+    df_info['full_id'] = df_info['שם הקבוצה'].str.strip() + " (" + df_info['מאמן'].str.strip() + ")"
     
     tabs = ["📝 הזנת העדפות", "📊 לוח שיבוץ (מנהל)"]
     active_tabs = st.tabs(tabs)
@@ -92,30 +89,25 @@ if os.path.exists(file_path):
                 if len(set([x['Day'] for x in new_selections])) < 4:
                     st.error("❌ חובה לסמן לפחות 4 ימים שונים.")
                 else:
-                    with st.spinner("שומר בגיליון..."):
+                    with st.spinner("שומר..."):
                         for sel in new_selections:
                             payload = {ENTRY_IDS["coach"]: selected_team, ENTRY_IDS["day"]: sel["Day"], ENTRY_IDS["shift"]: sel["Shift"]}
-                            requests.post(FORM_RESPONSE_URL, data=payload)
-                        st.success("נשמר בהצלחה! הנתונים יופיעו בלוח תוך רגע.")
-                        st.balloons()
+                            requests.post(FORM_URL, data=payload)
+                    st.success("נשמר! הנתונים יופיעו בלוח תוך דקה.")
 
     with active_tabs[1]:
         admin_key = st.text_input("סיסמת מנהל:", type="password")
         if admin_key == "1906":
-            col_a, col_b = st.columns([1,1])
-            with col_a:
-                if st.button("רענן נתונים מגוגל 🔄"):
-                    st.rerun()
+            if st.button("רענן נתונים מגוגל 🔄"):
+                st.rerun()
             
             raw_data = load_data_from_google()
             
             if not raw_data.empty:
-                # זיהוי עמודות דינמי
                 col_coach = raw_data.columns[1]
                 col_day = raw_data.columns[2]
                 col_shift = raw_data.columns[3]
                 
-                # יצירת גריד ריק
                 grid = []
                 for d in day_labels:
                     for s in st.session_state.active_slots:
@@ -123,15 +115,17 @@ if os.path.exists(file_path):
                             grid.append({"יום": d, "שעה": s, "מגרש": f, "שיבוץ": "", "מאמן": ""})
                 df_grid = pd.DataFrame(grid)
                 
-                # לוגיקת שיבוץ
+                # שיבוץ
                 for tid in df_info['full_id'].tolist():
-                    team_resps = raw_data[raw_data[col_coach] == tid]
+                    # חיפוש "גמיש" של הקבוצה בנתוני גוגל
+                    team_resps = raw_data[raw_data[col_coach].str.strip() == tid.strip()]
+                    
                     for _, req in team_resps.iterrows():
                         day, shift = req[col_day], req[col_shift]
                         if len(df_grid[(df_grid['יום'] == day) & (df_grid['שיבוץ'] == tid)]) >= 1: continue
                         
-                        half = len(st.session_state.active_slots) // 2
-                        allowed = st.session_state.active_slots[:half+1] if shift == "מוקדם" else st.session_state.active_slots[half:]
+                        slots = st.session_state.active_slots
+                        allowed = slots[:len(slots)//2+1] if shift == "מוקדם" else slots[len(slots)//2:]
                         coach_name = tid.split('(')[-1].replace(')', '').strip()
                         
                         for slot in allowed:
@@ -143,18 +137,18 @@ if os.path.exists(file_path):
                                 break
 
                 final_df = df_grid.pivot_table(index=['שעה', 'מגרש'], columns='יום', values='שיבוץ', aggfunc='first', fill_value="").reset_index()
+                st.write("### 📅 לוח שיבוץ סופי")
                 st.table(final_df)
                 
                 # כפתור הורדה
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                     final_df.to_excel(writer, index=False)
-                st.download_button("📥 הורד קובץ אקסל", data=output.getvalue(), file_name="hapoel_schedule.xlsx")
+                st.download_button("📥 הורד קובץ אקסל", data=output.getvalue(), file_name="schedule.xlsx")
                 
                 with st.expander("ראה נתונים גולמיים (ביקורת)"):
-                    st.write(f"נמצאו {len(raw_data)} שורות בגוגל שיטס.")
                     st.dataframe(raw_data)
             else:
-                st.warning("הגיליון ריק או שגוגל לא מחזיר נתונים.")
+                st.warning("הגיליון ריק.")
 else:
     st.error("קובץ CSV חסר")
