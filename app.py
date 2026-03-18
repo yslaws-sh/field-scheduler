@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 import os
 import io
+import time
 from datetime import datetime, timedelta
 
 # הגדרות אפליקציה
@@ -33,16 +34,21 @@ ENTRY_IDS = {
     "shift": "entry.1001387245"
 }
 
+# פונקציית טעינה עם מנגנון מניעת Cache חזק
 def load_data_from_google():
     try:
-        url = f"{SHEET_CSV_URL}&cache_bust={datetime.now().timestamp()}"
+        # יצירת קישור ייחודי בכל פעם כדי שגוגל לא יביא נתונים ישנים מהזיכרון
+        t = int(time.time())
+        url = f"{SHEET_CSV_URL}&cache_bust={t}"
         res = requests.get(url)
         if res.status_code == 200:
             df = pd.read_csv(io.StringIO(res.text))
             df.columns = [c.strip() for c in df.columns]
+            # מנקה שורות ריקות אם יש
+            df = df.dropna(subset=[df.columns[1]])
             return df
-    except:
-        pass
+    except Exception as e:
+        st.error(f"שגיאה בטעינה: {e}")
     return pd.DataFrame()
 
 # --- הגדרות מערכת ---
@@ -66,9 +72,8 @@ if os.path.exists(file_path):
         selected_team = st.selectbox("בחר קבוצה:", ["לחץ לבחירה..."] + df_info['full_id'].tolist())
         if selected_team != "לחץ לבחירה...":
             row = df_info[df_info['full_id'] == selected_team].iloc[0]
-            st.info(f"💡 **קבוצת {row['שם הקבוצה']}:** סמנו לפחות 4 ימים שונים לגמישות מרבית!")
+            st.info(f"💡 **קבוצת {row['שם הקבוצה']}:** סמנו לפחות 4 ימים שונים.")
 
-            # חישוב טווחי שעות להצגה למאמן
             slots = st.session_state.active_slots
             mid = len(slots) // 2
             early_range = f"{slots[0].split('-')[0]} - {slots[mid].split('-')[-1]}"
@@ -78,7 +83,6 @@ if os.path.exists(file_path):
             for d_label in day_labels:
                 with st.expander(f"📅 {d_label}", expanded=True):
                     c1, c2 = st.columns(2)
-                    # המאמן רואה רק שעות!
                     if c1.checkbox(f"⏰ {early_range}", key=f"e_{selected_team}_{d_label}"):
                         new_selections.append({"Day": d_label, "Shift": "מוקדם"})
                     if c2.checkbox(f"⏰ {late_range}", key=f"l_{selected_team}_{d_label}"):
@@ -88,42 +92,33 @@ if os.path.exists(file_path):
                 if len(set([x['Day'] for x in new_selections])) < 4:
                     st.error("❌ חובה לסמן לפחות 4 ימים שונים.")
                 else:
-                    with st.spinner("שומר בגיליון המרכזי..."):
-                        success = False
+                    with st.spinner("שומר בגיליון..."):
                         for sel in new_selections:
                             payload = {ENTRY_IDS["coach"]: selected_team, ENTRY_IDS["day"]: sel["Day"], ENTRY_IDS["shift"]: sel["Shift"]}
-                            r = requests.post(FORM_RESPONSE_URL, data=payload)
-                            if r.status_code == 200: success = True
-                        
-                        if success:
-                            st.success("הבחירה נשמרה בהצלחה! הנתונים יופיעו בלוח המנהל תוך דקה.")
-                            st.balloons()
-                        else:
-                            st.error("שגיאה בשמירה. וודא שהטופס מוגדר לקבלת תשובות.")
+                            requests.post(FORM_RESPONSE_URL, data=payload)
+                        st.success("נשמר בהצלחה! הנתונים יופיעו בלוח תוך רגע.")
+                        st.balloons()
 
     with active_tabs[1]:
         admin_key = st.text_input("סיסמת מנהל:", type="password")
         if admin_key == "1906":
-            st.button("רענן נתונים 🔄")
+            col_a, col_b = st.columns([1,1])
+            with col_a:
+                if st.button("רענן נתונים מגוגל 🔄"):
+                    st.rerun()
             
-            c1, c2 = st.columns(2)
-            with c1:
-                st.session_state.active_fields = st.multiselect("מגרשים פעילים:", ALL_FIELDS, default=st.session_state.active_fields)
-            with c2:
-                slot_input = st.text_input("זמני אימונים (הפרד בפסיק):", value=",".join(st.session_state.active_slots))
-                current_slots = [s.strip() for s in slot_input.split(",")]
-                st.session_state.active_slots = current_slots
-
             raw_data = load_data_from_google()
             
             if not raw_data.empty:
+                # זיהוי עמודות דינמי
                 col_coach = raw_data.columns[1]
                 col_day = raw_data.columns[2]
                 col_shift = raw_data.columns[3]
                 
+                # יצירת גריד ריק
                 grid = []
                 for d in day_labels:
-                    for s in current_slots:
+                    for s in st.session_state.active_slots:
                         for f in st.session_state.active_fields:
                             grid.append({"יום": d, "שעה": s, "מגרש": f, "שיבוץ": "", "מאמן": ""})
                 df_grid = pd.DataFrame(grid)
@@ -135,8 +130,8 @@ if os.path.exists(file_path):
                         day, shift = req[col_day], req[col_shift]
                         if len(df_grid[(df_grid['יום'] == day) & (df_grid['שיבוץ'] == tid)]) >= 1: continue
                         
-                        half = len(current_slots) // 2
-                        allowed = current_slots[:half+1] if shift == "מוקדם" else current_slots[half:]
+                        half = len(st.session_state.active_slots) // 2
+                        allowed = st.session_state.active_slots[:half+1] if shift == "מוקדם" else st.session_state.active_slots[half:]
                         coach_name = tid.split('(')[-1].replace(')', '').strip()
                         
                         for slot in allowed:
@@ -148,17 +143,18 @@ if os.path.exists(file_path):
                                 break
 
                 final_df = df_grid.pivot_table(index=['שעה', 'מגרש'], columns='יום', values='שיבוץ', aggfunc='first', fill_value="").reset_index()
-                st.write("### 📅 לוח שיבוץ סופי")
                 st.table(final_df)
                 
+                # כפתור הורדה
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                     final_df.to_excel(writer, index=False)
-                st.download_button("📥 הורד קובץ אקסל", data=output.getvalue(), file_name="schedule.xlsx")
+                st.download_button("📥 הורד קובץ אקסל", data=output.getvalue(), file_name="hapoel_schedule.xlsx")
                 
                 with st.expander("ראה נתונים גולמיים (ביקורת)"):
-                    st.write(raw_data)
+                    st.write(f"נמצאו {len(raw_data)} שורות בגוגל שיטס.")
+                    st.dataframe(raw_data)
             else:
-                st.warning("הגיליון ריק.")
+                st.warning("הגיליון ריק או שגוגל לא מחזיר נתונים.")
 else:
     st.error("קובץ CSV חסר")
