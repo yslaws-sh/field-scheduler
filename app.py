@@ -82,7 +82,7 @@ if os.path.exists(file_path):
         
         st.markdown("---")
         admin_key = st.text_input("כניסת מנהל (סיסמה):", type="password")
-        if admin_key == "1234":
+        if admin_key == "1906":
             st.session_state.admin_access = True
             st.rerun()
 
