@@ -16,11 +16,9 @@ st.markdown("""
     .main-header { background-color: #e31e24; padding: 20px; border-radius: 0 0 20px 20px; color: white; text-align: center; margin-bottom: 20px; }
     .stButton>button { width: 100%; height: 3.5em; background-color: #e31e24 !important; color: white !important; border-radius: 12px; font-weight: bold; }
     
-    /* עיצוב הטבלה שהשעות יראו ברור */
     table { width: 100%; direction: rtl; }
     th { background-color: #f1f3f5 !important; color: black !important; font-weight: bold !important; border: 1px solid #dee2e6 !important; }
     td { border: 1px solid #dee2e6 !important; padding: 10px !important; text-align: center !important; }
-    .hour-cell { background-color: #333 !important; color: white !important; font-weight: bold; }
     </style>
     <div class="main-header">
         <h1 style='margin:0; font-size: 24px;'>מועדון כדורגל הפועל הרצליה</h1>
@@ -47,15 +45,18 @@ if os.path.exists(file_path):
     df_info = pd.read_csv(file_path)
     df_info['full_id'] = df_info['שם הקבוצה'] + " (" + df_info['מאמן'] + ")"
     
-    tabs = ["📝 הזנת העדפות"]
-    if st.session_state.admin_access: tabs.append("📊 לוח שיבוץ (מנהל)")
-    active_tabs = st.tabs(tabs)
+    # ניהול טאבים
+    tab_titles = ["📝 הזנת העדפות"]
+    if st.session_state.admin_access:
+        tab_titles.append("📊 לוח שיבוץ (מנהל)")
+    
+    active_tabs = st.tabs(tab_titles)
     
     with active_tabs[0]:
         selected_team_id = st.selectbox("בחר קבוצה:", ["לחץ לבחירה..."] + df_info['full_id'].tolist())
         if selected_team_id != "לחץ לבחירה...":
             row = df_info[df_info['full_id'] == selected_team_id].iloc[0]
-            st.info(f"💡 קבוצת {row['שם הקבוצה']} צריכה {row['מספר אימונים']} אימונים. ככל שתיתן גמישות, כך תקבל מגרש טוב יותר!")
+            st.info(f"💡 קבוצת {row['שם הקבוצה']} צריכה {row['מספר אימונים']} אימונים.")
             
             saved = [r['Unique'] for r in st.session_state.db if r['TeamID'] == selected_team_id]
             new_selections = []
@@ -74,20 +75,21 @@ if os.path.exists(file_path):
                 else:
                     st.session_state.db = [r for r in st.session_state.db if r['TeamID'] != selected_team_id]
                     st.session_state.db.extend(new_selections)
-                    for sel in new_selections:
-                        try: requests.post(FORM_SUBMIT_URL, data={IDS["coach"]: sel["TeamID"], IDS["day"]: sel["Day"], IDS["shift"]: sel["Shift"]}, timeout=2)
-                        except: pass
-                    st.success("הבחירה נשמרה! תודה על הגמישות.")
+                    st.success("הבחירה נשמרה בהצלחה!")
                     st.balloons()
         
-        st.markdown("---")
-        admin_key = st.text_input("כניסת מנהל (סיסמה):", type="password")
-        if admin_key == "1906":
-            st.session_state.admin_access = True
-            st.rerun()
+        # כניסת מנהל
+        if not st.session_state.admin_access:
+            st.markdown("---")
+            admin_key = st.text_input("כניסת מנהל (סיסמה):", type="password")
+            if admin_key == "1906":
+                st.session_state.admin_access = True
+                st.rerun()
 
     if st.session_state.admin_access:
         with active_tabs[1]:
+            st.write("### 📅 לוח שיבוץ סופי (מנהל)")
+            
             # לוגיקת שיבוץ
             grid = []
             for d in day_labels:
@@ -106,8 +108,10 @@ if os.path.exists(file_path):
                     if usage[tid] >= quota[tid]: break
                     day, coach = req['Day'], req['Coach']
                     if len(df_grid[(df_grid['יום'] == day) & (df_grid['שיבוץ'] == tid)]) >= 1: continue
+                    
                     prev_assignment = df_grid[(df_grid['יום'] == day) & (df_grid['מאמן'] == coach)]
                     allowed_slots = ['16:30-18:00', '18:00-19:30'] if req['Shift'] == "מוקדם" else ['18:00-19:30', '19:30-21:00']
+                    
                     for slot in allowed_slots:
                         if not prev_assignment.empty:
                             target_field = prev_assignment.iloc[0]['מגרש']
@@ -122,12 +126,10 @@ if os.path.exists(file_path):
                             usage[tid] += 1
                             break
 
-            # הפיכת השעה והמגרש לעמודות רגילות בטבלה
-            final_df = df_grid.pivot(index=['שעה', 'מגרש'], columns='יום', values='שיבוץ').reset_index()
+            # יצירת הטבלה
+            final_df = df_grid.pivot_table(index=['שעה', 'מגרש'], columns='יום', values='שיבוץ', aggfunc='first', fill_value="").reset_index()
             final_df = final_df.reindex(columns=['שעה', 'מגרש'] + day_labels)
 
-            st.write("### 📅 לוח שיבוץ סופי (מנהל)")
-            
             # פונקציית צביעה
             def color_rows(row):
                 color = '#ffcccc' if "קאנטרי" in str(row['מגרש']) else '#cce5ff'
@@ -149,7 +151,8 @@ if os.path.exists(file_path):
                 worksheet.set_column('C:G', 25)
 
             st.download_button("📥 הורד לוח צבעוני לוואטסאפ", data=output.getvalue(), file_name="hapoel_schedule.xlsx")
-            if st.button("יציאה ממצב מנהל"):
+            
+            if st.button("🔴 יציאה ממצב מנהל"):
                 st.session_state.admin_access = False
                 st.rerun()
 else:
