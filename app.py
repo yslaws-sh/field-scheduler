@@ -48,15 +48,15 @@ if os.path.exists(file_path):
     df_info = pd.read_csv(file_path)
     df_info['full_id'] = df_info['שם הקבוצה'] + " (" + df_info['מאמן'] + ")"
     
-    tab_titles = ["📝 הזנת העדפות"]
-    if st.session_state.admin_access: tab_titles.append("⚙️ ניהול מגרשים ושיבוץ")
-    active_tabs = st.tabs(tab_titles)
+    tabs = ["📝 הזנת העדפות"]
+    if st.session_state.admin_access: tabs.append("⚙️ ניהול מגרשים ושיבוץ")
+    active_tabs = st.tabs(tabs)
     
     with active_tabs[0]:
         selected_team_id = st.selectbox("בחר קבוצה:", ["לחץ לבחירה..."] + df_info['full_id'].tolist())
         if selected_team_id != "לחץ לבחירה...":
             row = df_info[df_info['full_id'] == selected_team_id].iloc[0]
-            st.info(f"💡 **הודעה לקבוצת {row['שם הקבוצה']}:** עליך לסמן לפחות 4 ימים שונים. ככל שתיתן לנו יותר גמישות בשעות ובאפשרויות, כך נוכל לבוא לקראתך ולשבץ אותך במגרש המועדף עליך!")
+            st.info(f"💡 **הודעה לקבוצת {row['שם הקבוצה']}:** עליך לסמן לפחות 4 ימים שונים. ככל שתיתן לנו יותר גמישות, כך נוכל לבוא לקראתך!")
 
             saved = [r['Unique'] for r in st.session_state.db if r['TeamID'] == selected_team_id]
             new_selections = []
@@ -76,7 +76,6 @@ if os.path.exists(file_path):
                     st.session_state.db = [r for r in st.session_state.db if r['TeamID'] != selected_team_id]
                     st.session_state.db.extend(new_selections)
                     st.success("הבחירה נשמרה בהצלחה!")
-                    st.balloons()
         
         if not st.session_state.admin_access:
             st.markdown("---")
@@ -93,11 +92,13 @@ if os.path.exists(file_path):
                 st.session_state.active_fields = st.multiselect("מגרשים פעילים:", ALL_FIELD_OPTIONS, default=st.session_state.active_fields)
             with col_cfg2:
                 slot_input = st.text_input("זמני אימונים (הפרד בפסיק):", value=",".join(st.session_state.active_slots))
-                st.session_state.active_slots = [s.strip() for s in slot_input.split(",")]
+                current_slots = [s.strip() for s in slot_input.split(",")]
+                st.session_state.active_slots = current_slots
 
+            # בניית הגריד לפי השעות המעודכנות
             grid = []
             for d in day_labels:
-                for s in st.session_state.active_slots:
+                for s in current_slots:
                     for f in st.session_state.active_fields:
                         grid.append({"יום": d, "שעה": s, "מגרש": f, "שיבוץ": "", "מאמן": ""})
             df_grid = pd.DataFrame(grid)
@@ -105,6 +106,7 @@ if os.path.exists(file_path):
             usage = {tid: 0 for tid in df_info['full_id']}
             quota = {row['full_id']: int(row['מספר אימונים']) for _, row in df_info.iterrows()}
 
+            # שיבוץ
             for tid in df_info['full_id'].tolist():
                 team_reqs = [r for r in st.session_state.db if r['TeamID'] == tid]
                 for req in team_reqs:
@@ -112,34 +114,43 @@ if os.path.exists(file_path):
                     day, coach = req['Day'], req['Coach']
                     if len(df_grid[(df_grid['יום'] == day) & (df_grid['שיבוץ'] == tid)]) >= 1: continue
                     
-                    prev_assignment = df_grid[(df_grid['יום'] == day) & (df_grid['מאמן'] == coach)]
-                    half = len(st.session_state.active_slots) // 2
-                    allowed = st.session_state.active_slots[:half+1] if req['Shift'] == "מוקדם" else st.session_state.active_slots[half:]
+                    # חלוקת השעות האמיתיות למשמרות
+                    half = len(current_slots) // 2
+                    if req['Shift'] == "מוקדם":
+                        allowed_slots = current_slots[:half+1]
+                    else:
+                        allowed_slots = current_slots[half:]
                     
-                    for slot in allowed:
-                        if not prev_assignment.empty:
-                            target_f = prev_assignment.iloc[0]['מגרש']
+                    for slot in allowed_slots:
+                        prev = df_grid[(df_grid['יום'] == day) & (df_grid['מאמן'] == coach)]
+                        if not prev.empty:
+                            target_f = prev.iloc[0]['מגרש']
                             mask = (df_grid['יום'] == day) & (df_grid['שעה'] == slot) & (df_grid['מגרש'] == target_f) & (df_grid['שיבוץ'] == "")
                         else:
                             mask = (df_grid['יום'] == day) & (df_grid['שעה'] == slot) & (df_grid['שיבוץ'] == "") & (df_grid['מאמן'] != coach)
                         
-                        free_idx = df_grid[mask].index
-                        if len(free_idx) > 0:
-                            df_grid.at[free_idx[0], 'שיבוץ'] = tid
-                            df_grid.at[free_idx[0], 'מאמן'] = coach
+                        idx = df_grid[mask].index
+                        if len(idx) > 0:
+                            df_grid.at[idx[0], 'שיבוץ'] = tid
+                            df_grid.at[idx[0], 'מאמן'] = coach
                             usage[tid] += 1
                             break
 
             if not df_grid.empty:
-                # שינוי כאן: השעה והמגרש מוצגים כעמודות נפרדות וברורות
+                # יצירת הטבלה הסופית עם השעות האמיתיות
                 final_df = df_grid.pivot_table(index=['שעה', 'מגרש'], columns='יום', values='שיבוץ', aggfunc='first', fill_value="").reset_index()
+                
+                # מיון השעות לפי הסדר שהגדרת בתיבת הטקסט
+                final_df['שעה'] = pd.Categorical(final_df['שעה'], categories=current_slots, ordered=True)
+                final_df = final_df.sort_values(['שעה', 'מגרש'])
+
                 st.write("### 📅 לוח שיבוץ סופי")
                 
                 def color_rows(row):
                     m = str(row['מגרש'])
                     if "קאנטרי" in m: c = '#ffcccc'
                     elif "משק" in m: c = '#cce5ff'
-                    else: c = '#C6EFCE' # סינטטי
+                    else: c = '#C6EFCE'
                     return [f'background-color: {c}'] * len(row)
 
                 st.table(final_df.style.apply(color_rows, axis=1))
@@ -156,7 +167,6 @@ if os.path.exists(file_path):
                         fmt = f_red if "קאנטרי" in m_val else f_blue if "משק" in m_val else f_green
                         worksheet.set_row(r_num + 1, 30, fmt)
                     worksheet.set_column('A:B', 20)
-                    worksheet.set_column('C:G', 25)
                 st.download_button("📥 הורד לוח לצילום מסך", data=output.getvalue(), file_name="hapoel_schedule.xlsx")
 
             if st.button("🔴 יציאה"):
