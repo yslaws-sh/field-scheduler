@@ -23,29 +23,28 @@ st.markdown("""
     </div>
     """, unsafe_allow_html=True)
 
-# --- הגדרות חיבור לגוגל ---
-FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSd-HaGeFh0P_zU7xs1kiFjLnM5i2mjZhiaRTcUD4h_L0ETksA/formResponse"
-# הקישור הישיר לגיליון (CSV הפעם בשביל יציבות)
+# --- הגדרות חיבור לגוגל (מעודכן לפי ה-IDs שחילצנו) ---
+FORM_RESPONSE_URL = "https://docs.google.com/forms/d/e/1FAIpQLSd-HaGeFh0P_zU7xs1kiFjLnM5i2mjZhiaRTcUD4h_L0ETksA/formResponse"
 SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR8In1pn4dPWFvpIrxj1eLufbA7KQ6_wupxQiDbfxsAmvjsHrsO8ehPc3f5fT0TbenxVaLr8Tet6h5u/pub?output=csv"
 
-IDS = {
+# IDs שנמצאו בבדיקה הקודמת
+ENTRY_IDS = {
     "coach": "entry.1199305397",
     "day": "entry.1231450869",
     "shift": "entry.1001387245"
 }
 
-def load_google_data():
+def load_data_from_google():
     try:
-        # שימוש בפרמטר רנדומלי כדי להכריח את גוגל להביא נתונים טריים
-        fresh_url = f"{SHEET_CSV_URL}&x={datetime.now().timestamp()}"
-        res = requests.get(fresh_url)
+        # הוספת פרמטר למניעת Cache (כדי לראות את שי מיד)
+        url = f"{SHEET_CSV_URL}&cache_bust={datetime.now().timestamp()}"
+        res = requests.get(url)
         if res.status_code == 200:
             df = pd.read_csv(io.StringIO(res.text))
-            # אנחנו מנקים את השמות של העמודות כדי שלא יהיו רווחים או תווים מוזרים
             df.columns = [c.strip() for c in df.columns]
             return df
-    except Exception as e:
-        st.error(f"שגיאה במשיכת נתונים: {e}")
+    except:
+        pass
     return pd.DataFrame()
 
 # --- הגדרות מערכת ---
@@ -69,7 +68,7 @@ if os.path.exists(file_path):
         selected_team = st.selectbox("בחר קבוצה:", ["לחץ לבחירה..."] + df_info['full_id'].tolist())
         if selected_team != "לחץ לבחירה...":
             row = df_info[df_info['full_id'] == selected_team].iloc[0]
-            st.info(f"💡 **קבוצת {row['שם הקבוצה']}:** סמנו לפחות 4 ימים שונים לגמישות מרבית!")
+            st.info(f"💡 **קבוצת {row['שם הקבוצה']}:** סמנו לפחות 4 ימים שונים.")
 
             new_selections = []
             for d_label in day_labels:
@@ -84,25 +83,39 @@ if os.path.exists(file_path):
                 if len(set([x['Day'] for x in new_selections])) < 4:
                     st.error("❌ חובה לסמן לפחות 4 ימים שונים.")
                 else:
-                    with st.spinner("מעדכן גיליון..."):
+                    with st.spinner("שולח נתונים לגוגל..."):
+                        success_count = 0
                         for sel in new_selections:
-                            requests.post(FORM_URL, data={IDS["coach"]: selected_team, IDS["day"]: sel["Day"], IDS["shift"]: sel["Shift"]})
-                    st.success("נשמר! הנתונים יופיעו בלוח תוך רגע.")
+                            payload = {
+                                ENTRY_IDS["coach"]: selected_team,
+                                ENTRY_IDS["day"]: sel["Day"],
+                                ENTRY_IDS["shift"]: sel["Shift"]
+                            }
+                            # שליחה פיזית לגוגל
+                            r = requests.post(FORM_RESPONSE_URL, data=payload)
+                            if r.status_code == 200:
+                                success_count += 1
+                        
+                        if success_count > 0:
+                            st.success(f"נשמרו {success_count} העדפות בגיליון! (יכול לקחת דקה עד שיופיעו בלוח)")
+                            st.balloons()
+                        else:
+                            st.error("תקלה בשליחה. וודא שהאינטרנט תקין.")
 
     with active_tabs[1]:
         admin_key = st.text_input("סיסמת מנהל:", type="password")
         if admin_key == "1906":
-            st.button("רענן נתונים מגוגל שיטס 🔄")
+            if st.button("רענן נתונים 🔄"):
+                st.rerun()
             
-            # טעינה
-            raw_responses = load_google_data()
+            raw_data = load_data_from_google()
             
-            if not raw_responses.empty:
-                # זיהוי עמודות לפי ה-Header של גוגל
-                # בדרך כלל: Timestamp, Coach, day, shift
-                col_coach = raw_responses.columns[1]
-                col_day = raw_responses.columns[2]
-                col_shift = raw_responses.columns[3]
+            if not raw_data.empty:
+                # שיבוץ לוגי (לפי העמודות בגיליון)
+                # העמודה הראשונה היא תמיד Timestamp, אחריה הנתונים שלנו
+                col_coach = raw_data.columns[1]
+                col_day = raw_data.columns[2]
+                col_shift = raw_data.columns[3]
                 
                 grid = []
                 for d in day_labels:
@@ -111,19 +124,17 @@ if os.path.exists(file_path):
                             grid.append({"יום": d, "שעה": s, "מגרש": f, "שיבוץ": "", "מאמן": ""})
                 df_grid = pd.DataFrame(grid)
                 
-                # שיבוץ (לוגיקה חכמה)
+                # לוגיקת שיבוץ (הגרסה החכמה שלך)
                 for tid in df_info['full_id'].tolist():
-                    team_data = raw_responses[raw_responses[col_coach] == tid]
-                    for _, req in team_data.iterrows():
+                    team_resps = raw_data[raw_data[col_coach] == tid]
+                    for _, req in team_resps.iterrows():
                         day, shift = req[col_day], req[col_shift]
-                        
-                        # מגבלת אימון אחד ליום
                         if len(df_grid[(df_grid['יום'] == day) & (df_grid['שיבוץ'] == tid)]) >= 1: continue
                         
                         slots = st.session_state.active_slots
                         allowed = slots[:len(slots)//2+1] if shift == "מוקדם" else slots[len(slots)//2:]
-                        
                         coach_name = tid.split('(')[-1].replace(')', '').strip()
+                        
                         for slot in allowed:
                             mask = (df_grid['יום'] == day) & (df_grid['שעה'] == slot) & (df_grid['שיבוץ'] == "") & (df_grid['מאמן'] != coach_name)
                             idx = df_grid[mask].index
@@ -132,17 +143,12 @@ if os.path.exists(file_path):
                                 df_grid.at[idx[0], 'מאמן'] = coach_name
                                 break
 
-                # טבלה סופית
                 final_df = df_grid.pivot_table(index=['שעה', 'מגרש'], columns='יום', values='שיבוץ', aggfunc='first', fill_value="").reset_index()
                 st.table(final_df)
                 
-                # כפתור הורדה
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    final_df.to_excel(writer, index=False)
-                st.download_button("📥 הורד לוח אקסל", data=output.getvalue(), file_name="schedule.xlsx")
-                
-                with st.expander("ראה נתונים גולמיים (לוודא ששי נמצא)"):
-                    st.write(raw_responses)
+                with st.expander("ראה נתונים גולמיים (ביקורת)"):
+                    st.write(raw_data)
             else:
-                st.warning("הגיליון ריק.")
+                st.warning("הגיליון עדיין לא התעדכן או שהוא ריק.")
+else:
+    st.error("קובץ CSV חסר")
