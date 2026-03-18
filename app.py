@@ -36,13 +36,12 @@ ENTRY_IDS = {
 
 def load_data_from_google():
     try:
-        # ביטול Cache של גוגל
-        res = requests.get(f"{SHEET_CSV_URL}&cache_bust={time.time()}")
+        # ביטול Cache אגרסיבי כדי לראות נתונים טריים
+        res = requests.get(f"{SHEET_CSV_URL}&nocache={time.time()}")
         if res.status_code == 200:
             df = pd.read_csv(io.StringIO(res.text))
-            # ניקוי שמות עמודות וערכים מרווחים מיותרים
-            df.columns = [c.strip() for c in df.columns]
-            df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+            # ניקוי כל הטקסט בגיליון מרווחים מיותרים
+            df = df.applymap(lambda x: str(x).strip() if pd.notnull(x) else "")
             return df
     except:
         pass
@@ -89,25 +88,20 @@ if os.path.exists(file_path):
                 if len(set([x['Day'] for x in new_selections])) < 4:
                     st.error("❌ חובה לסמן לפחות 4 ימים שונים.")
                 else:
-                    with st.spinner("שומר..."):
+                    with st.spinner("מעדכן גיליון..."):
                         for sel in new_selections:
                             payload = {ENTRY_IDS["coach"]: selected_team, ENTRY_IDS["day"]: sel["Day"], ENTRY_IDS["shift"]: sel["Shift"]}
                             requests.post(FORM_URL, data=payload)
-                    st.success("נשמר! הנתונים יופיעו בלוח תוך דקה.")
+                    st.success("נשמר בהצלחה!")
 
     with active_tabs[1]:
         admin_key = st.text_input("סיסמת מנהל:", type="password")
         if admin_key == "1906":
-            if st.button("רענן נתונים מגוגל 🔄"):
-                st.rerun()
+            st.button("רענן נתונים 🔄")
             
             raw_data = load_data_from_google()
             
             if not raw_data.empty:
-                col_coach = raw_data.columns[1]
-                col_day = raw_data.columns[2]
-                col_shift = raw_data.columns[3]
-                
                 grid = []
                 for d in day_labels:
                     for s in st.session_state.active_slots:
@@ -115,21 +109,27 @@ if os.path.exists(file_path):
                             grid.append({"יום": d, "שעה": s, "מגרש": f, "שיבוץ": "", "מאמן": ""})
                 df_grid = pd.DataFrame(grid)
                 
-                # שיבוץ
+                # לוגיקת שיבוץ "סלחנית"
                 for tid in df_info['full_id'].tolist():
-                    # חיפוש "גמיש" של הקבוצה בנתוני גוגל
-                    team_resps = raw_data[raw_data[col_coach].str.strip() == tid.strip()]
+                    # פילטר: מחפש איפה שם הקבוצה (tid) מופיע בעמודה השנייה של גוגל
+                    team_resps = raw_data[raw_data.iloc[:, 1].str.contains(tid.split('(')[0].strip(), na=False)]
                     
                     for _, req in team_resps.iterrows():
-                        day, shift = req[col_day], req[col_shift]
-                        if len(df_grid[(df_grid['יום'] == day) & (df_grid['שיבוץ'] == tid)]) >= 1: continue
+                        day_val = str(req.iloc[2])
+                        shift_val = str(req.iloc[3])
+                        
+                        # מוצא את היום המתאים באפליקציה (גם אם התאריך קצת שונה בגוגל)
+                        matched_day = next((d for d in day_labels if d.split(' ')[1] in day_val), None)
+                        if not matched_day: continue
+                        
+                        if len(df_grid[(df_grid['יום'] == matched_day) & (df_grid['שיבוץ'] == tid)]) >= 1: continue
                         
                         slots = st.session_state.active_slots
-                        allowed = slots[:len(slots)//2+1] if shift == "מוקדם" else slots[len(slots)//2:]
+                        allowed = slots[:len(slots)//2+1] if "מוקדם" in shift_val else slots[len(slots)//2:]
                         coach_name = tid.split('(')[-1].replace(')', '').strip()
                         
                         for slot in allowed:
-                            mask = (df_grid['יום'] == day) & (df_grid['שעה'] == slot) & (df_grid['שיבוץ'] == "") & (df_grid['מאמן'] != coach_name)
+                            mask = (df_grid['יום'] == matched_day) & (df_grid['שעה'] == slot) & (df_grid['שיבוץ'] == "") & (df_grid['מאמן'] != coach_name)
                             idx = df_grid[mask].index
                             if len(idx) > 0:
                                 df_grid.at[idx[0], 'שיבוץ'] = tid
@@ -140,15 +140,7 @@ if os.path.exists(file_path):
                 st.write("### 📅 לוח שיבוץ סופי")
                 st.table(final_df)
                 
-                # כפתור הורדה
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    final_df.to_excel(writer, index=False)
-                st.download_button("📥 הורד קובץ אקסל", data=output.getvalue(), file_name="schedule.xlsx")
-                
                 with st.expander("ראה נתונים גולמיים (ביקורת)"):
                     st.dataframe(raw_data)
             else:
                 st.warning("הגיליון ריק.")
-else:
-    st.error("קובץ CSV חסר")
