@@ -36,15 +36,17 @@ ENTRY_IDS = {
 
 def load_data_from_google():
     try:
-        # ביטול Cache אגרסיבי כדי לראות נתונים טריים
+        # הוספת timestamp למניעת Cache
         res = requests.get(f"{SHEET_CSV_URL}&nocache={time.time()}")
         if res.status_code == 200:
+            # תיקון הקידוד לעברית (UTF-8)
+            res.encoding = 'utf-8' 
             df = pd.read_csv(io.StringIO(res.text))
-            # ניקוי כל הטקסט בגיליון מרווחים מיותרים
+            # ניקוי רווחים וערכים
             df = df.applymap(lambda x: str(x).strip() if pd.notnull(x) else "")
             return df
-    except:
-        pass
+    except Exception as e:
+        st.error(f"שגיאה במשיכת נתונים: {e}")
     return pd.DataFrame()
 
 # --- הגדרות מערכת ---
@@ -52,9 +54,9 @@ ALL_FIELDS = ['קאנטרי קדמי 1', 'קאנטרי קדמי 2', 'קאנטר�
 if 'active_fields' not in st.session_state: st.session_state.active_fields = ALL_FIELDS
 if 'active_slots' not in st.session_state: st.session_state.active_slots = ['16:30-18:00', '18:00-19:30', '19:30-21:00']
 
+# תאריכים
 start_date = datetime(2026, 3, 22)
-days_list = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי']
-day_labels = [(start_date + timedelta(days=i)).strftime(f"יום {days_list[i]} %d/%m") for i in range(5)]
+day_labels = [(start_date + timedelta(days=i)).strftime(f"יום %A %d/%m").replace('Sunday','ראשון').replace('Monday','שני').replace('Tuesday','שלישי').replace('Wednesday','רביעי').replace('Thursday','חמישי') for i in range(5)]
 
 file_path = 'טבלת מאמנים.csv'
 if os.path.exists(file_path):
@@ -88,7 +90,7 @@ if os.path.exists(file_path):
                 if len(set([x['Day'] for x in new_selections])) < 4:
                     st.error("❌ חובה לסמן לפחות 4 ימים שונים.")
                 else:
-                    with st.spinner("מעדכן גיליון..."):
+                    with st.spinner("שומר..."):
                         for sel in new_selections:
                             payload = {ENTRY_IDS["coach"]: selected_team, ENTRY_IDS["day"]: sel["Day"], ENTRY_IDS["shift"]: sel["Shift"]}
                             requests.post(FORM_URL, data=payload)
@@ -98,10 +100,14 @@ if os.path.exists(file_path):
         admin_key = st.text_input("סיסמת מנהל:", type="password")
         if admin_key == "1906":
             st.button("רענן נתונים 🔄")
-            
             raw_data = load_data_from_google()
             
             if not raw_data.empty:
+                # מיפוי עמודות
+                col_coach = raw_data.columns[1]
+                col_day = raw_data.columns[2]
+                col_shift = raw_data.columns[3]
+
                 grid = []
                 for d in day_labels:
                     for s in st.session_state.active_slots:
@@ -109,17 +115,16 @@ if os.path.exists(file_path):
                             grid.append({"יום": d, "שעה": s, "מגרש": f, "שיבוץ": "", "מאמן": ""})
                 df_grid = pd.DataFrame(grid)
                 
-                # לוגיקת שיבוץ "סלחנית"
                 for tid in df_info['full_id'].tolist():
-                    # פילטר: מחפש איפה שם הקבוצה (tid) מופיע בעמודה השנייה של גוגל
-                    team_resps = raw_data[raw_data.iloc[:, 1].str.contains(tid.split('(')[0].strip(), na=False)]
+                    # בדיקת התאמה חכמה שמתעלמת מהג'יבריש
+                    team_resps = raw_data[raw_data[col_coach].apply(lambda x: tid in x or x in tid)]
                     
                     for _, req in team_resps.iterrows():
-                        day_val = str(req.iloc[2])
-                        shift_val = str(req.iloc[3])
+                        day_val = str(req[col_day])
+                        shift_val = str(req[col_shift])
                         
-                        # מוצא את היום המתאים באפליקציה (גם אם התאריך קצת שונה בגוגל)
-                        matched_day = next((d for d in day_labels if d.split(' ')[1] in day_val), None)
+                        # ניקוי והתאמת יום
+                        matched_day = next((d for d in day_labels if d in day_val or day_val in d), None)
                         if not matched_day: continue
                         
                         if len(df_grid[(df_grid['יום'] == matched_day) & (df_grid['שיבוץ'] == tid)]) >= 1: continue
